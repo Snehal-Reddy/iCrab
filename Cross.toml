@@ -1,0 +1,7 @@
+# Build for iSH (i686-unknown-linux-musl) using cross-rs.
+# Requires: cargo install cross, Docker.
+# Usage: cross build [--release]   or   ./build.sh [--release]
+#
+# default-target: use this target when no --target is given
+[build]
+default-target = "i686-unknown-linux-musl"
