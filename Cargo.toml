@@ -17,6 +17,9 @@ tokio = { version = "1.41", features = ["full"] }
 # Config and API types (config.toml)
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
+# HTTP + JSON for Telegram API (minimal: rustls for static musl)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde_json = "1.0"
 
 [profile.release]
 lto = true
