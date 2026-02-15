@@ -1,0 +1,22 @@
+# iCrab — copy to ~/.icrab/config.toml then replace placeholders with your values.
+# Or set secrets via env: TELEGRAM_BOT_TOKEN, ICRAB_LLM_API_KEY, ICRAB_LLM_MODEL, etc.
+
+workspace = "~/.icrab/workspace"
+restrict-to-workspace = true
+
+[telegram]
+bot-token = "YOUR_TELEGRAM_BOT_TOKEN"
+allowed-user-ids = []   # e.g. [123456789] or leave [] (behavior depends on your code)
+
+[llm]
+provider = "openrouter"
+api-base = "https://openrouter.ai/api/v1"
+api-key = "YOUR_LLM_API_KEY"
+model = "YOUR_MODEL"
+
+[heartbeat]
+interval-minutes = 30
+
+# Optional: Brave web search. Leave commented or set ICRAB_TOOLS_WEB_BRAVE_API_KEY in env.
+# [tools.web]
+# brave-api-key = "YOUR_BRAVE_API_KEY"
