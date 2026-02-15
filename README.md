@@ -1,4 +1,4 @@
-# iClaw
+# iCrab
 
 Minimal openClaw style personal AI assistant that runs on an old iPhone as a server. Telegram-only; workspace-backed agent with tools.
 

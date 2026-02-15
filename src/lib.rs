@@ -1,4 +1,4 @@
-//! iClaw library: config, Telegram poller, agent loop, tools, workspace, LLM, skills, heartbeat, cron.
+//! iCrab library: config, Telegram poller, agent loop, tools, workspace, LLM, skills, heartbeat, cron.
 
 pub mod agent;
 pub mod config;

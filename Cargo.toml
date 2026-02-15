@@ -1,12 +1,12 @@
 [package]
-name = "iclaw"
+name = "icrab"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
 description = "Minimal openClaw style personal AI assistant that runs on an old iPhone as a server."
 readme = "README.md"
 license = "MIT"
-repository = "https://github.com/boopop/iclaw"
+repository = "https://github.com/Snehal-Reddy/iCrab"
 
 [package.metadata.docs.rs]
 targets = ["i686-unknown-linux-musl"]

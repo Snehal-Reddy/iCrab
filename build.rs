@@ -1,4 +1,4 @@
-//! Build script for iclaw.
+//! Build script for icrab.
 //!
 //! Emits `cargo:rustc-cfg` for target so code can use `#[cfg(target_ish)]` etc. if needed.
 //!
