@@ -1,0 +1,28 @@
+[package]
+name = "iclaw"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+description = "Minimal openClaw style personal AI assistant that runs on an old iPhone as a server."
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/boopop/iclaw"
+
+[package.metadata.docs.rs]
+targets = ["i686-unknown-linux-musl"]
+
+[dependencies]
+# Async runtime (poller, agent loop, cron, heartbeat)
+tokio = { version = "1.41", features = ["full"] }
+# Config and API types (config.toml, Telegram/LLM JSON)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.release.package."*"]
+opt-level = 3
