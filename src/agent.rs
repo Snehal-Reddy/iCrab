@@ -1,4 +1,161 @@
 //! Agent loop: context builder, session load/save/summarize, LLM + tool_calls loop, subagent runner.
 
+use std::path::Path;
+
+use crate::agent::session::{Session, SessionError};
+use context::build_messages;
+use crate::llm::{HttpProvider, Message, Role};
+use crate::skills::{self, SkillsError};
+use crate::telegram::OutboundMsg;
+use crate::tools::registry::ToolRegistry;
+use crate::tools::context::ToolCtx;
+
 pub mod context;
 pub mod session;
+
+const MAX_ITERATIONS: u32 = 20;
+
+#[derive(Debug)]
+pub enum AgentError {
+    Llm(crate::llm::LlmError),
+    Session(String),
+    Context(String),
+    Tool(String),
+    MaxIterations,
+}
+
+impl std::fmt::Display for AgentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentError::Llm(e) => write!(f, "agent llm: {}", e),
+            AgentError::Session(s) => write!(f, "agent session: {}", s),
+            AgentError::Context(s) => write!(f, "agent context: {}", s),
+            AgentError::Tool(s) => write!(f, "agent tool: {}", s),
+            AgentError::MaxIterations => write!(f, "agent: max iterations reached"),
+        }
+    }
+}
+
+impl std::error::Error for AgentError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            AgentError::Llm(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::llm::LlmError> for AgentError {
+    fn from(e: crate::llm::LlmError) -> Self {
+        AgentError::Llm(e)
+    }
+}
+
+impl From<SessionError> for AgentError {
+    fn from(e: SessionError) -> Self {
+        AgentError::Session(e.to_string())
+    }
+}
+
+impl From<SkillsError> for AgentError {
+    fn from(e: SkillsError) -> Self {
+        AgentError::Context(e.to_string())
+    }
+}
+
+/// Process one user message: load session, build context, run LLM loop until no tool_calls, persist and return reply.
+pub async fn process_message(
+    llm: &HttpProvider,
+    registry: &ToolRegistry,
+    workspace_path: &Path,
+    model: &str,
+    chat_id: &str,
+    user_message: &str,
+    tool_ctx: &ToolCtx,
+) -> Result<String, AgentError> {
+    let mut session = Session::load(workspace_path, chat_id).await?;
+    let skills_summary = skills::build_skills_summary(workspace_path)?;
+    let tool_summaries = registry.summaries();
+
+    let today = crate::workspace::today_yyyymmdd();
+    let mut messages = build_messages(
+        workspace_path,
+        session.history(),
+        session.summary(),
+        user_message,
+        Some(chat_id),
+        &skills_summary,
+        &tool_summaries,
+        Some(&today),
+    );
+    session.add_user_message(user_message);
+
+    let tool_defs = registry.to_tool_defs();
+    let mut final_content: String = String::new();
+
+    for _iter in 1..=MAX_ITERATIONS {
+        let response = llm.chat(&messages, &tool_defs, model).await?;
+
+        if response.tool_calls.is_empty() {
+            final_content = response.content.trim().to_string();
+            if final_content.is_empty() {
+                final_content = "(No response)".to_string();
+            }
+            break;
+        }
+
+        messages.push(Message {
+            role: Role::Assistant,
+            content: response.content,
+            tool_call_id: None,
+            tool_calls: Some(response.tool_calls.clone()),
+        });
+
+        for tc in &response.tool_calls {
+            let args = match serde_json::from_str::<serde_json::Value>(&tc.function.arguments) {
+                Ok(v) => v,
+                Err(e) => {
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: format!("Invalid JSON arguments: {}", e),
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_calls: None,
+                    });
+                    continue;
+                }
+            };
+
+            let result = registry.execute(tool_ctx, &tc.function.name, &args);
+
+            if let Some(ref text) = result.for_user {
+                if !result.silent {
+                    if let (Some(tx), Some(cid)) = (tool_ctx.outbound_tx.as_ref(), tool_ctx.chat_id) {
+                        let _ = tx.try_send(OutboundMsg {
+                            chat_id: cid,
+                            text: text.clone(),
+                            channel: tool_ctx
+                                .channel
+                                .clone()
+                                .unwrap_or_else(|| "telegram".to_string()),
+                        });
+                    }
+                }
+            }
+
+            messages.push(Message {
+                role: Role::Tool,
+                content: result.for_llm,
+                tool_call_id: Some(tc.id.clone()),
+                tool_calls: None,
+            });
+        }
+    }
+
+    if final_content.is_empty() {
+        final_content = "Max iterations reached.".to_string();
+    }
+
+    session.add_assistant_message(&final_content, None);
+    session.save().await?;
+    Ok(final_content)
+}

@@ -28,6 +28,9 @@ pub struct Message {
     /// Set for tool-result messages (role = Tool).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Set for assistant messages that requested tool calls (OpenAI shape).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tool_calls: Option<Vec<ToolCall>>,
 }
 
 /// OpenAI-style function tool: `type: "function"`, `function: { name, description, parameters }`.
@@ -268,6 +271,7 @@ mod tests {
                 role: Role::User,
                 content: "Hi".to_string(),
                 tool_call_id: None,
+                tool_calls: None,
             },
         ];
         let body = ChatRequest {
@@ -291,6 +295,7 @@ mod tests {
             role: Role::User,
             content: "Run foo".to_string(),
             tool_call_id: None,
+            tool_calls: None,
         }];
         let tools = vec![ToolDef::function(
             "foo".to_string(),
@@ -307,5 +312,38 @@ mod tests {
         assert_eq!(json["tools"][0]["type"], "function");
         assert_eq!(json["tools"][0]["function"]["name"], "foo");
         assert_eq!(json["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn request_body_assistant_with_tool_calls() {
+        let messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "call_1".to_string(),
+                    type_: "function".to_string(),
+                    function: ToolCallFunction {
+                        name: "read_file".to_string(),
+                        arguments: r#"{"path":"x"}"#.to_string(),
+                    },
+                }]),
+            },
+        ];
+        let body = ChatRequest {
+            model: "gpt-4",
+            messages: &messages,
+            tools: None,
+            tool_choice: None,
+        };
+        let json = serde_json::to_value(&body).unwrap();
+        let msg = &json["messages"][0];
+        assert_eq!(msg["role"], "assistant");
+        assert!(msg["tool_calls"].is_array());
+        assert_eq!(msg["tool_calls"][0]["id"], "call_1");
+        assert_eq!(msg["tool_calls"][0]["type"], "function");
+        assert_eq!(msg["tool_calls"][0]["function"]["name"], "read_file");
+        assert_eq!(msg["tool_calls"][0]["function"]["arguments"], r#"{"path":"x"}"#);
     }
 }
