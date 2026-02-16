@@ -16,10 +16,12 @@ targets = ["i686-unknown-linux-musl"]
 tokio = { version = "1.41", features = ["full"] }
 # Config and API types (config.toml)
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
-# HTTP + JSON for Telegram API (minimal: rustls for static musl)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+toml = "0.9.8"
+# HTTP + JSON. Reqwest 0.13 uses rustls with aws-lc (reliable on i686-musl); no ring.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 serde_json = "1.0"
+# Date for today + recent daily notes (YYYYMMDD)
+time = { version = "0.3", default-features = false, features = ["formatting", "std"] }
 
 [profile.release]
 lto = true
