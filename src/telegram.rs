@@ -53,6 +53,18 @@ impl std::fmt::Display for TelegramError {
 
 impl std::error::Error for TelegramError {}
 
+/// Format a reqwest/HTTP error and its source chain for logging (surfaces TLS, DNS, etc.).
+fn format_error_chain(e: &impl std::error::Error) -> String {
+    let mut s = e.to_string();
+    let mut src = e.source();
+    while let Some(inner) = src {
+        s.push_str(" | ");
+        s.push_str(&inner.to_string());
+        src = inner.source();
+    }
+    s
+}
+
 // --- Minimal Telegram API structs ---
 
 #[derive(Debug, Deserialize)]
@@ -143,12 +155,12 @@ impl TelegramClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| TelegramError::Http(e.to_string()))?;
+            .map_err(|e| TelegramError::Http(format_error_chain(&e)))?;
         let status = res.status();
         let body = res
             .text()
             .await
-            .map_err(|e| TelegramError::Http(e.to_string()))?;
+            .map_err(|e| TelegramError::Http(format_error_chain(&e)))?;
 
         if !status.is_success() {
             if let Ok(api_err) = serde_json::from_str::<ApiErrorResponse>(&body) {
@@ -199,12 +211,12 @@ impl TelegramClient {
                 .json(&body)
                 .send()
                 .await
-                .map_err(|e| TelegramError::Http(e.to_string()))?;
+                .map_err(|e| TelegramError::Http(format_error_chain(&e)))?;
             let status = res.status();
             let body_str = res
                 .text()
                 .await
-                .map_err(|e| TelegramError::Http(e.to_string()))?;
+                .map_err(|e| TelegramError::Http(format_error_chain(&e)))?;
 
             if status.is_success() {
                 return Ok(());
