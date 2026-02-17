@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::agent::subagent_manager::SubagentManager;
 use crate::tools::context::ToolCtx;
-use crate::tools::registry::Tool;
+use crate::tools::registry::{BoxFuture, Tool};
 use crate::tools::result::ToolResult;
 
 /// Spawn tool: starts a subagent task in the background.
@@ -47,37 +47,43 @@ impl Tool for SpawnTool {
         })
     }
 
-    fn execute(&self, ctx: &ToolCtx, args: &Value) -> ToolResult {
-        let task = match args.get("task").and_then(Value::as_str) {
-            Some(t) if !t.is_empty() => t.to_string(),
-            _ => return ToolResult::error("missing or empty 'task' argument"),
-        };
-        let label = args.get("label").and_then(Value::as_str).map(String::from);
+    fn execute<'a>(&'a self, ctx: &'a ToolCtx, args: &'a Value) -> BoxFuture<'a, ToolResult> {
+        let manager = self.manager.clone();
+        let args = args.clone();
+        let ctx = ctx.clone();
 
-        let Some(chat_id) = ctx.chat_id else {
-            return ToolResult::error("spawn unavailable: no chat_id");
-        };
-        let Some(ref outbound_tx) = ctx.outbound_tx else {
-            return ToolResult::error("spawn unavailable: no outbound channel");
-        };
-        let channel = ctx
-            .channel
-            .clone()
-            .unwrap_or_else(|| "telegram".to_string());
+        Box::pin(async move {
+            let task = match args.get("task").and_then(Value::as_str) {
+                Some(t) if !t.is_empty() => t.to_string(),
+                _ => return ToolResult::error("missing or empty 'task' argument"),
+            };
+            let label = args.get("label").and_then(Value::as_str).map(String::from);
 
-        let task_id = self.manager.spawn(
-            task,
-            label.clone(),
-            chat_id,
-            Arc::clone(outbound_tx),
-            channel,
-        );
+            let Some(chat_id) = ctx.chat_id else {
+                return ToolResult::error("spawn unavailable: no chat_id");
+            };
+            let Some(ref outbound_tx) = ctx.outbound_tx else {
+                return ToolResult::error("spawn unavailable: no outbound channel");
+            };
+            let channel = ctx
+                .channel
+                .clone()
+                .unwrap_or_else(|| "telegram".to_string());
 
-        let display_label = label.as_deref().unwrap_or("task");
-        ToolResult::async_(format!(
-            "Subagent '{}' started (id: {}). It will report back when done.",
-            display_label, task_id
-        ))
+            let task_id = manager.spawn(
+                task,
+                label.clone(),
+                chat_id,
+                Arc::clone(outbound_tx),
+                channel,
+            );
+
+            let display_label = label.as_deref().unwrap_or("task");
+            ToolResult::async_(format!(
+                "Subagent '{}' started (id: {}). It will report back when done.",
+                display_label, task_id
+            ))
+        })
     }
 }
 
@@ -94,33 +100,33 @@ mod tests {
         assert!(tool.description().contains("background"));
     }
 
-    #[test]
-    fn execute_missing_task_returns_error() {
+    #[tokio::test]
+    async fn execute_missing_task_returns_error() {
         let mgr = Arc::new(test_manager());
         let tool = SpawnTool::new(mgr);
         let ctx = test_ctx(true);
-        let res = tool.execute(&ctx, &serde_json::json!({}));
+        let res = tool.execute(&ctx, &serde_json::json!({})).await;
         assert!(res.is_error);
         assert!(res.for_llm.contains("task"));
     }
 
-    #[test]
-    fn execute_missing_chat_id_returns_error() {
+    #[tokio::test]
+    async fn execute_missing_chat_id_returns_error() {
         let mgr = Arc::new(test_manager());
         let tool = SpawnTool::new(mgr);
         let mut ctx = test_ctx(true);
         ctx.chat_id = None;
-        let res = tool.execute(&ctx, &serde_json::json!({"task": "do something"}));
+        let res = tool.execute(&ctx, &serde_json::json!({"task": "do something"})).await;
         assert!(res.is_error);
     }
 
-    #[test]
-    fn execute_missing_outbound_returns_error() {
+    #[tokio::test]
+    async fn execute_missing_outbound_returns_error() {
         let mgr = Arc::new(test_manager());
         let tool = SpawnTool::new(mgr);
         let mut ctx = test_ctx(true);
         ctx.outbound_tx = None;
-        let res = tool.execute(&ctx, &serde_json::json!({"task": "do something"}));
+        let res = tool.execute(&ctx, &serde_json::json!({"task": "do something"})).await;
         assert!(res.is_error);
     }
 

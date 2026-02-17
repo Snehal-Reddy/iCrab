@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::telegram::OutboundMsg;
 use crate::tools::context::ToolCtx;
-use crate::tools::registry::Tool;
+use crate::tools::registry::{BoxFuture, Tool};
 use crate::tools::result::ToolResult;
 
 fn get_string(args: &Value, key: &str) -> Result<String, String> {
@@ -36,29 +36,34 @@ impl Tool for MessageTool {
         })
     }
 
-    fn execute(&self, ctx: &ToolCtx, args: &Value) -> ToolResult {
-        let text = match get_string(args, "text") {
-            Ok(t) => t,
-            Err(e) => return ToolResult::error(e),
-        };
-        let Some(tx) = &ctx.outbound_tx else {
-            return ToolResult::error("no outbound channel (message tool unavailable)");
-        };
-        let Some(chat_id) = ctx.chat_id else {
-            return ToolResult::error("no chat_id (message tool unavailable)");
-        };
-        let channel = ctx
-            .channel
-            .clone()
-            .unwrap_or_else(|| "telegram".to_string());
-        let msg = OutboundMsg {
-            chat_id,
-            text,
-            channel,
-        };
-        match tx.try_send(msg) {
-            Ok(()) => ToolResult::silent("sent"),
-            Err(e) => ToolResult::error(e.to_string()),
-        }
+    fn execute<'a>(&'a self, ctx: &'a ToolCtx, args: &'a Value) -> BoxFuture<'a, ToolResult> {
+        let args = args.clone();
+        let ctx = ctx.clone();
+
+        Box::pin(async move {
+            let text = match get_string(&args, "text") {
+                Ok(t) => t,
+                Err(e) => return ToolResult::error(e),
+            };
+            let Some(tx) = &ctx.outbound_tx else {
+                return ToolResult::error("no outbound channel (message tool unavailable)");
+            };
+            let Some(chat_id) = ctx.chat_id else {
+                return ToolResult::error("no chat_id (message tool unavailable)");
+            };
+            let channel = ctx
+                .channel
+                .clone()
+                .unwrap_or_else(|| "telegram".to_string());
+            let msg = OutboundMsg {
+                chat_id,
+                text,
+                channel,
+            };
+            match tx.try_send(msg) {
+                Ok(()) => ToolResult::silent("sent"),
+                Err(e) => ToolResult::error(e.to_string()),
+            }
+        })
     }
 }

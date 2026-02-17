@@ -1,11 +1,11 @@
 //! web_search (Brave/DDG), web_fetch (GET URL, truncated body).
 
 use regex::Regex;
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde_json::Value;
 
 use crate::tools::context::ToolCtx;
-use crate::tools::registry::Tool;
+use crate::tools::registry::{BoxFuture, Tool};
 use crate::tools::result::ToolResult;
 
 const USER_AGENT: &str = "iCrab/1.0 (https://github.com/Snehal-Reddy/iCrab)";
@@ -31,16 +31,16 @@ impl WebSearchProvider {
         }
     }
 
-    fn search(&self, client: &Client, query: &str, count: u8) -> Result<String, String> {
+    async fn search(&self, client: &Client, query: &str, count: u8) -> Result<String, String> {
         let count = count.clamp(1, 10);
         match self {
-            Self::Brave { api_key, .. } => brave_search(client, api_key, query, count),
-            Self::DuckDuckGo { .. } => duckduckgo_search(client, query, count),
+            Self::Brave { api_key, .. } => brave_search(client, api_key, query, count).await,
+            Self::DuckDuckGo { .. } => duckduckgo_search(client, query, count).await,
         }
     }
 }
 
-fn brave_search(
+async fn brave_search(
     client: &Client,
     api_key: &str,
     query: &str,
@@ -55,9 +55,10 @@ fn brave_search(
         .get(url)
         .header("X-Subscription-Token", api_key)
         .send()
+        .await
         .map_err(|e| e.to_string())?;
     let status = res.status();
-    let body = res.text().map_err(|e| e.to_string())?;
+    let body = res.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
         return Err(format!("Brave API error {}: {}", status, body.trim()));
     }
@@ -87,17 +88,17 @@ fn format_brave_results(results: &[Value]) -> String {
     }
 }
 
-fn duckduckgo_search(client: &Client, query: &str, count: u8) -> Result<String, String> {
+async fn duckduckgo_search(client: &Client, query: &str, count: u8) -> Result<String, String> {
     let url = reqwest::Url::parse_with_params(
         "https://html.duckduckgo.com/html/",
         &[("q", query)],
     )
     .map_err(|e| e.to_string())?;
-    let res = client.get(url).send().map_err(|e| e.to_string())?;
+    let res = client.get(url).send().await.map_err(|e| e.to_string())?;
     if !res.status().is_success() {
         return Err(format!("DuckDuckGo returned {}", res.status()));
     }
-    let html = res.text().map_err(|e| e.to_string())?;
+    let html = res.text().await.map_err(|e| e.to_string())?;
     extract_ddg_results(&html, count)
 }
 
@@ -217,18 +218,23 @@ impl Tool for WebSearchTool {
         })
     }
 
-    fn execute(&self, _ctx: &ToolCtx, args: &Value) -> ToolResult {
-        let query = match get_string(args, "query") {
-            Ok(q) => q,
-            Err(e) => return ToolResult::error(e),
-        };
-        let count = get_optional_u8(args, "count")
-            .unwrap_or_else(|| self.provider.max_results())
-            .clamp(1, 10);
-        match self.provider.search(&self.client, &query, count) {
-            Ok(s) => ToolResult::ok(s),
-            Err(e) => ToolResult::error(e),
-        }
+    fn execute<'a>(&'a self, _ctx: &'a ToolCtx, args: &'a Value) -> BoxFuture<'a, ToolResult> {
+        let args = args.clone();
+        let provider = self.provider.clone();
+        let client = self.client.clone();
+        Box::pin(async move {
+            let query = match get_string(&args, "query") {
+                Ok(q) => q,
+                Err(e) => return ToolResult::error(e),
+            };
+            let count = get_optional_u8(&args, "count")
+                .unwrap_or_else(|| provider.max_results())
+                .clamp(1, 10);
+            match provider.search(&client, &query, count).await {
+                Ok(s) => ToolResult::ok(s),
+                Err(e) => ToolResult::error(e),
+            }
+        })
     }
 }
 
@@ -276,74 +282,79 @@ impl Tool for WebFetchTool {
         })
     }
 
-    fn execute(&self, _ctx: &ToolCtx, args: &Value) -> ToolResult {
-        let url_str = match get_string(args, "url") {
-            Ok(u) => u,
-            Err(e) => return ToolResult::error(e),
-        };
-        let url = match validate_fetch_url(&url_str) {
-            Ok(u) => u,
-            Err(e) => return ToolResult::error(e),
-        };
-        let max_chars = get_optional_u32(args, "max_chars").unwrap_or(self.max_chars);
+    fn execute<'a>(&'a self, _ctx: &'a ToolCtx, args: &'a Value) -> BoxFuture<'a, ToolResult> {
+        let args = args.clone();
+        let client = self.client.clone();
+        let max_chars = self.max_chars;
+        Box::pin(async move {
+            let url_str = match get_string(&args, "url") {
+                Ok(u) => u,
+                Err(e) => return ToolResult::error(e),
+            };
+            let url = match validate_fetch_url(&url_str) {
+                Ok(u) => u,
+                Err(e) => return ToolResult::error(e),
+            };
+            let max_chars = get_optional_u32(&args, "max_chars").unwrap_or(max_chars);
 
-        let res = match self.client.get(url.clone()).send() {
-            Ok(r) => r,
-            Err(e) => return ToolResult::error(e.to_string()),
-        };
-        let status = res.status();
-        let headers = res.headers().clone();
-        let body = match res.bytes() {
-            Ok(b) => b,
-            Err(e) => return ToolResult::error(e.to_string()),
-        };
+            let res = match client.get(url.clone()).send().await {
+                Ok(r) => r,
+                Err(e) => return ToolResult::error(e.to_string()),
+            };
+            let status = res.status();
+            let headers = res.headers().clone();
+            let body = match res.bytes().await {
+                Ok(b) => b,
+                Err(e) => return ToolResult::error(e.to_string()),
+            };
 
-        let content_type = headers
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_lowercase();
+            let content_type = headers
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_lowercase();
 
-        let text = if content_type.contains("application/json") {
-            match serde_json::from_slice::<Value>(&body) {
-                Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| String::from_utf8_lossy(&body).into_owned()),
-                Err(_) => String::from_utf8_lossy(&body).into_owned(),
-            }
-        } else if content_type.contains("text/html") || content_type.contains("application/xhtml") {
-            let raw = String::from_utf8_lossy(&body).into_owned();
-            html_to_text(&raw)
-        } else {
-            String::from_utf8_lossy(&body).into_owned()
-        };
-
-        let truncated = text.len() > max_chars as usize;
-        let out = if truncated {
-            format!(
-                "[Truncated to {} chars]\n\n{}",
-                max_chars,
-                &text[..max_chars as usize]
-            )
-        } else {
-            text
-        };
-
-        let header = format!(
-            "URL: {}\nStatus: {}\nLength: {} bytes{}\n\n",
-            url,
-            status,
-            body.len(),
-            if truncated {
-                format!(" (truncated to {} chars)", max_chars)
+            let text = if content_type.contains("application/json") {
+                match serde_json::from_slice::<Value>(&body) {
+                    Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| String::from_utf8_lossy(&body).into_owned()),
+                    Err(_) => String::from_utf8_lossy(&body).into_owned(),
+                }
+            } else if content_type.contains("text/html") || content_type.contains("application/xhtml") {
+                let raw = String::from_utf8_lossy(&body).into_owned();
+                html_to_text(&raw)
             } else {
-                String::new()
-            }
-        );
-        ToolResult::ok(format!("{header}{out}"))
+                String::from_utf8_lossy(&body).into_owned()
+            };
+
+            let truncated = text.len() > max_chars as usize;
+            let out = if truncated {
+                format!(
+                    "[Truncated to {} chars]\n\n{}",
+                    max_chars,
+                    &text[..max_chars as usize]
+                )
+            } else {
+                text
+            };
+
+            let header = format!(
+                "URL: {}\nStatus: {}\nLength: {} bytes{}\n\n",
+                url,
+                status,
+                body.len(),
+                if truncated {
+                    format!(" (truncated to {} chars)", max_chars)
+                } else {
+                    String::new()
+                }
+            );
+            ToolResult::ok(format!("{header}{out}"))
+        })
     }
 }
 
-/// Build a blocking HTTP client for web tools (timeouts, redirect limit, User-Agent).
-pub fn web_blocking_client() -> Result<Client, String> {
+/// Build a HTTP client for web tools (timeouts, redirect limit, User-Agent).
+pub fn web_client() -> Result<Client, String> {
     Client::builder()
         .user_agent(USER_AGENT)
         .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
@@ -503,54 +514,54 @@ mod tests {
         assert!(out.contains("Foo <bar>"));
     }
 
-    #[test]
-    fn web_search_tool_missing_query_returns_error() {
-        let client = web_blocking_client().expect("client");
+    #[tokio::test]
+    async fn web_search_tool_missing_query_returns_error() {
+        let client = web_client().expect("client");
         let provider = WebSearchProvider::DuckDuckGo { max_results: 5 };
         let tool = WebSearchTool::new(provider, client);
         let ctx = dummy_ctx();
         let args = serde_json::json!({});
-        let res = tool.execute(&ctx, &args);
+        let res = tool.execute(&ctx, &args).await;
         assert!(res.is_error);
         assert!(res.for_llm.contains("query") || res.for_llm.contains("missing"));
     }
 
-    #[test]
-    fn web_fetch_tool_missing_url_returns_error() {
-        let client = web_blocking_client().expect("client");
+    #[tokio::test]
+    async fn web_fetch_tool_missing_url_returns_error() {
+        let client = web_client().expect("client");
         let tool = WebFetchTool::new(client, 50_000);
         let ctx = dummy_ctx();
         let args = serde_json::json!({});
-        let res = tool.execute(&ctx, &args);
+        let res = tool.execute(&ctx, &args).await;
         assert!(res.is_error);
         assert!(res.for_llm.contains("url") || res.for_llm.contains("missing"));
     }
 
-    #[test]
-    fn web_fetch_tool_unsupported_scheme_returns_error() {
-        let client = web_blocking_client().expect("client");
+    #[tokio::test]
+    async fn web_fetch_tool_unsupported_scheme_returns_error() {
+        let client = web_client().expect("client");
         let tool = WebFetchTool::new(client, 50_000);
         let ctx = dummy_ctx();
         let args = serde_json::json!({ "url": "ftp://example.com/file" });
-        let res = tool.execute(&ctx, &args);
+        let res = tool.execute(&ctx, &args).await;
         assert!(res.is_error);
         assert!(res.for_llm.contains("http") || res.for_llm.contains("https"));
     }
 
-    #[test]
-    fn web_fetch_tool_no_host_returns_error() {
-        let client = web_blocking_client().expect("client");
+    #[tokio::test]
+    async fn web_fetch_tool_no_host_returns_error() {
+        let client = web_client().expect("client");
         let tool = WebFetchTool::new(client, 50_000);
         let ctx = dummy_ctx();
         let args = serde_json::json!({ "url": "https://" });
-        let res = tool.execute(&ctx, &args);
+        let res = tool.execute(&ctx, &args).await;
         assert!(res.is_error);
         assert!(res.for_llm.contains("host") || res.for_llm.to_lowercase().contains("url"));
     }
 
     #[test]
     fn web_search_tool_name_and_params() {
-        let client = web_blocking_client().expect("client");
+        let client = web_client().expect("client");
         let provider = WebSearchProvider::DuckDuckGo { max_results: 5 };
         let tool = WebSearchTool::new(provider, client);
         assert_eq!(tool.name(), "web_search");
@@ -560,7 +571,7 @@ mod tests {
 
     #[test]
     fn web_fetch_tool_name_and_params() {
-        let client = web_blocking_client().expect("client");
+        let client = web_client().expect("client");
         let tool = WebFetchTool::new(client, 10_000);
         assert_eq!(tool.name(), "web_fetch");
         let params = tool.parameters();

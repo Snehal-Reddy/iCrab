@@ -1,7 +1,9 @@
 //! Register tools by name; name, description, JSON schema, execute(ctx, args) -> ToolResult.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, RwLock};
 
 use serde_json::Value;
 
@@ -11,14 +13,16 @@ use crate::tools::context::ToolCtx;
 use crate::tools::file::{AppendFile, EditFile, ListDir, ReadFile, WriteFile};
 use crate::tools::message::MessageTool;
 use crate::tools::result::ToolResult;
-use crate::tools::web::{WebFetchTool, WebSearchProvider, WebSearchTool, web_blocking_client};
+use crate::tools::web::{WebFetchTool, WebSearchProvider, WebSearchTool, web_client};
+
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// A single tool: name, description, JSON schema for args, and execute.
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn parameters(&self) -> Value;
-    fn execute(&self, ctx: &ToolCtx, args: &Value) -> ToolResult;
+    fn execute<'a>(&'a self, ctx: &'a ToolCtx, args: &'a Value) -> BoxFuture<'a, ToolResult>;
 }
 
 /// Convert a tool to LLM provider tool definition.
@@ -34,7 +38,7 @@ pub fn tool_to_def(tool: &dyn Tool) -> ToolDef {
 /// Registry of tools by name. Thread-safe; cheap to clone (Arc inside).
 #[derive(Default)]
 pub struct ToolRegistry {
-    inner: RwLock<HashMap<String, Box<dyn Tool + Send + Sync>>>,
+    inner: RwLock<HashMap<String, Arc<dyn Tool + Send + Sync>>>,
 }
 
 impl ToolRegistry {
@@ -51,21 +55,26 @@ impl ToolRegistry {
         self.inner
             .write()
             .expect("registry lock")
-            .insert(name, Box::new(tool));
+            .insert(name, Arc::new(tool));
     }
 
     /// Execute tool by name. Returns error result if not found.
-    pub fn execute(
+    pub async fn execute(
         &self,
         ctx: &ToolCtx,
         name: &str,
         args: &Value,
     ) -> ToolResult {
-        let guard = self.inner.read().expect("registry lock");
-        let Some(tool) = guard.get(name) else {
-            return ToolResult::error(format!("tool '{name}' not found"));
+        let tool = {
+            let guard = self.inner.read().expect("registry lock");
+            guard.get(name).cloned()
         };
-        tool.execute(ctx, args)
+
+        if let Some(tool) = tool {
+            tool.execute(ctx, args).await
+        } else {
+            ToolResult::error(format!("tool '{name}' not found"))
+        }
     }
 
     /// All tool definitions for the LLM.
@@ -120,7 +129,7 @@ pub fn build_core_registry(config: &Config) -> ToolRegistry {
         .and_then(|w| w.web_fetch_max_chars)
         .unwrap_or(DEFAULT_WEB_FETCH_MAX_CHARS);
 
-    if let Ok(client) = web_blocking_client() {
+    if let Ok(client) = web_client() {
         let provider = web_cfg
             .and_then(|w| w.brave_api_key.as_deref())
             .filter(|k| !k.is_empty())
@@ -152,8 +161,8 @@ mod tests {
     use super::*;
     use crate::tools::file::ReadFile;
 
-    #[test]
-    fn registry_register_execute_to_tool_defs() {
+    #[tokio::test]
+    async fn registry_register_execute_to_tool_defs() {
         let reg = ToolRegistry::new();
         reg.register(ReadFile);
         assert!(reg.list().contains(&"read_file".to_string()));
@@ -172,9 +181,9 @@ mod tests {
             outbound_tx: None,
         };
         let args = serde_json::json!({ "path": "." });
-        let res = reg.execute(&ctx, "read_file", &args);
+        let res = reg.execute(&ctx, "read_file", &args).await;
         assert!(res.is_error); // . is a dir, not a file
-        let res = reg.execute(&ctx, "unknown", &serde_json::json!({}));
+        let res = reg.execute(&ctx, "unknown", &serde_json::json!({})).await;
         assert!(res.is_error);
         assert!(res.for_llm.contains("not found"));
     }

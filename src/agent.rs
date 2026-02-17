@@ -117,7 +117,7 @@ pub async fn run_agent_loop(
                 }
             };
 
-            let result = registry.execute(tool_ctx, &tc.function.name, &args);
+            let result = registry.execute(tool_ctx, &tc.function.name, &args).await;
 
             if let Some(ref text) = result.for_user {
                 if !result.silent {
