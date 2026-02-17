@@ -100,8 +100,9 @@ impl ToolRegistry {
 const DEFAULT_BRAVE_MAX_RESULTS: u8 = 5;
 const DEFAULT_WEB_FETCH_MAX_CHARS: u32 = 50_000;
 
-/// Build default registry with file, message, and web tools.
-pub fn build_default_registry(config: &Config) -> ToolRegistry {
+/// Build the core registry (file + message + web).  Used for subagent
+/// registries (no spawn, no cron) and as the base for the main registry.
+pub fn build_core_registry(config: &Config) -> ToolRegistry {
     let reg = ToolRegistry::new();
     reg.register(ReadFile);
     reg.register(WriteFile);
@@ -137,6 +138,13 @@ pub fn build_default_registry(config: &Config) -> ToolRegistry {
     }
 
     reg
+}
+
+/// Build the default (main-agent) registry: core tools only.
+/// Caller adds spawn (and later cron) after constructing SubagentManager.
+#[inline]
+pub fn build_default_registry(config: &Config) -> ToolRegistry {
+    build_core_registry(config)
 }
 
 #[cfg(test)]

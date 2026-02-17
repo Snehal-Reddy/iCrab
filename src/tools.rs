@@ -10,5 +10,5 @@ pub mod spawn;
 pub mod web;
 
 pub use context::ToolCtx;
-pub use registry::{build_default_registry, tool_to_def, Tool, ToolRegistry};
+pub use registry::{build_core_registry, build_default_registry, tool_to_def, Tool, ToolRegistry};
 pub use result::ToolResult;

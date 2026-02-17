@@ -1,17 +1,22 @@
 //! Agent loop: context builder, session load/save/summarize, LLM + tool_calls loop, subagent runner.
 
 use std::path::Path;
+use std::sync::Arc;
+
+use tokio::sync::mpsc;
 
 use crate::agent::session::{Session, SessionError};
+use crate::agent::subagent_manager::{SubagentManager, SubagentStatus};
 use context::build_messages;
 use crate::llm::{HttpProvider, Message, Role};
 use crate::skills::{self, SkillsError};
 use crate::telegram::OutboundMsg;
-use crate::tools::registry::ToolRegistry;
 use crate::tools::context::ToolCtx;
+use crate::tools::registry::ToolRegistry;
 
 pub mod context;
 pub mod session;
+pub mod subagent_manager;
 
 const MAX_ITERATIONS: u32 = 20;
 
@@ -63,45 +68,32 @@ impl From<SkillsError> for AgentError {
     }
 }
 
-/// Process one user message: load session, build context, run LLM loop until no tool_calls, persist and return reply.
-pub async fn process_message(
+// ---------------------------------------------------------------------------
+// Inner agent loop (shared by main agent and subagent)
+// ---------------------------------------------------------------------------
+
+/// Pure agent loop: given messages and tools, call LLM repeatedly until no
+/// tool_calls remain.  Returns final assistant content.  No session I/O.
+pub async fn run_agent_loop(
     llm: &HttpProvider,
     registry: &ToolRegistry,
-    workspace_path: &Path,
-    model: &str,
-    chat_id: &str,
-    user_message: &str,
+    mut messages: Vec<Message>,
     tool_ctx: &ToolCtx,
+    model: &str,
+    max_iterations: u32,
 ) -> Result<String, AgentError> {
-    let mut session = Session::load(workspace_path, chat_id).await?;
-    let skills_summary = skills::build_skills_summary(workspace_path)?;
-    let tool_summaries = registry.summaries();
-
-    let today = crate::workspace::today_yyyymmdd();
-    let mut messages = build_messages(
-        workspace_path,
-        session.history(),
-        session.summary(),
-        user_message,
-        Some(chat_id),
-        &skills_summary,
-        &tool_summaries,
-        Some(&today),
-    );
-    session.add_user_message(user_message);
-
     let tool_defs = registry.to_tool_defs();
-    let mut final_content: String = String::new();
 
-    for _iter in 1..=MAX_ITERATIONS {
+    for _iter in 1..=max_iterations {
         let response = llm.chat(&messages, &tool_defs, model).await?;
 
         if response.tool_calls.is_empty() {
-            final_content = response.content.trim().to_string();
-            if final_content.is_empty() {
-                final_content = "(No response)".to_string();
-            }
-            break;
+            let content = response.content.trim().to_string();
+            return Ok(if content.is_empty() {
+                "(No response)".to_string()
+            } else {
+                content
+            });
         }
 
         messages.push(Message {
@@ -129,7 +121,9 @@ pub async fn process_message(
 
             if let Some(ref text) = result.for_user {
                 if !result.silent {
-                    if let (Some(tx), Some(cid)) = (tool_ctx.outbound_tx.as_ref(), tool_ctx.chat_id) {
+                    if let (Some(tx), Some(cid)) =
+                        (tool_ctx.outbound_tx.as_ref(), tool_ctx.chat_id)
+                    {
                         let _ = tx.try_send(OutboundMsg {
                             chat_id: cid,
                             text: text.clone(),
@@ -151,11 +145,135 @@ pub async fn process_message(
         }
     }
 
-    if final_content.is_empty() {
-        final_content = "Max iterations reached.".to_string();
-    }
+    Ok("Max iterations reached.".to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Main agent entry point (session-aware wrapper around run_agent_loop)
+// ---------------------------------------------------------------------------
+
+/// Process one user message: load session, build context, run LLM loop until
+/// no tool_calls, persist session and return reply.
+pub async fn process_message(
+    llm: &HttpProvider,
+    registry: &ToolRegistry,
+    workspace_path: &Path,
+    model: &str,
+    chat_id: &str,
+    user_message: &str,
+    tool_ctx: &ToolCtx,
+) -> Result<String, AgentError> {
+    let mut session = Session::load(workspace_path, chat_id).await?;
+    let skills_summary = skills::build_skills_summary(workspace_path)?;
+    let tool_summaries = registry.summaries();
+
+    let today = crate::workspace::today_yyyymmdd();
+    let messages = build_messages(
+        workspace_path,
+        session.history(),
+        session.summary(),
+        user_message,
+        Some(chat_id),
+        &skills_summary,
+        &tool_summaries,
+        Some(&today),
+    );
+    session.add_user_message(user_message);
+
+    let final_content =
+        run_agent_loop(llm, registry, messages, tool_ctx, model, MAX_ITERATIONS).await?;
 
     session.add_assistant_message(&final_content, None);
     session.save().await?;
     Ok(final_content)
+}
+
+// ---------------------------------------------------------------------------
+// Subagent runner (background; called by SubagentManager::spawn)
+// ---------------------------------------------------------------------------
+
+/// Run a subagent to completion.  Builds a minimal system prompt (with skills
+/// and tool summaries), runs `run_agent_loop`, then updates the manager task
+/// state.  Called inside `tokio::spawn` — must not panic.
+pub(crate) async fn run_subagent(
+    manager: Arc<SubagentManager>,
+    task_id: String,
+    task: String,
+    _label: Option<String>,
+    chat_id: i64,
+    outbound_tx: Arc<mpsc::Sender<OutboundMsg>>,
+    channel: String,
+) {
+    // --- Build system prompt ---
+    let mut system = String::from(
+        "You are a subagent. Complete the given task independently and report the result.\n\
+         You have access to tools - use them as needed to complete your task.\n\
+         After completing the task, provide a clear summary of what was done.\n\
+         Send your result to the user with the message tool.\n",
+    );
+
+    // Skills
+    match skills::build_skills_summary(manager.workspace()) {
+        Ok(ref s) if !s.is_empty() => {
+            system.push_str("\n--- Skills ---\n");
+            system.push_str(s);
+            system.push('\n');
+        }
+        Err(e) => {
+            eprintln!("subagent {}: skills error: {}", task_id, e);
+        }
+        _ => {}
+    }
+
+    // Tool summaries
+    let summaries = manager.registry().summaries();
+    if !summaries.is_empty() {
+        system.push_str("\n--- Tools ---\n");
+        for line in &summaries {
+            system.push_str(line);
+            system.push('\n');
+        }
+    }
+
+    let messages = vec![
+        Message {
+            role: Role::System,
+            content: system,
+            tool_call_id: None,
+            tool_calls: None,
+        },
+        Message {
+            role: Role::User,
+            content: task,
+            tool_call_id: None,
+            tool_calls: None,
+        },
+    ];
+
+    let tool_ctx = ToolCtx {
+        workspace: manager.workspace().clone(),
+        restrict_to_workspace: manager.restrict_to_workspace(),
+        chat_id: Some(chat_id),
+        channel: Some(channel),
+        outbound_tx: Some(outbound_tx),
+    };
+
+    match run_agent_loop(
+        manager.llm(),
+        manager.registry(),
+        messages,
+        &tool_ctx,
+        manager.model(),
+        manager.max_iterations(),
+    )
+    .await
+    {
+        Ok(content) => {
+            manager.complete_task(&task_id, SubagentStatus::Completed, Some(content));
+        }
+        Err(e) => {
+            eprintln!("subagent {} error: {}", task_id, e);
+            manager.complete_task(&task_id, SubagentStatus::Failed, Some(e.to_string()));
+        }
+    }
 }

@@ -6,10 +6,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use icrab::agent;
+use icrab::agent::subagent_manager::SubagentManager;
 use icrab::config;
 use icrab::llm::HttpProvider;
 use icrab::telegram::{self, OutboundMsg};
 use icrab::tools;
+use icrab::tools::spawn::SpawnTool;
+
+const SUBAGENT_MAX_ITERATIONS: u32 = 10;
 
 #[tokio::main]
 async fn main() {
@@ -25,7 +29,7 @@ async fn main() {
     eprintln!("workspace: {}", cfg.workspace_path());
 
     let llm = match HttpProvider::from_config(&cfg) {
-        Ok(p) => p,
+        Ok(p) => Arc::new(p),
         Err(e) => {
             eprintln!("llm: {}", e);
             std::process::exit(1);
@@ -36,9 +40,25 @@ async fn main() {
         .as_ref()
         .and_then(|l| l.model.as_deref())
         .unwrap_or("google/gemini-3-flash-preview");
-    let registry = tools::build_default_registry(&cfg);
     let workspace = PathBuf::from(cfg.workspace_path());
     let restrict = cfg.restrict_to_workspace.unwrap_or(true);
+
+    // Build subagent registry (core only — no spawn, no cron).
+    let subagent_registry = Arc::new(tools::build_core_registry(&cfg));
+
+    // SubagentManager: owns the subagent config and task map.
+    let manager = Arc::new(SubagentManager::new(
+        Arc::clone(&llm),
+        subagent_registry,
+        model.to_string(),
+        workspace.clone(),
+        restrict,
+        SUBAGENT_MAX_ITERATIONS,
+    ));
+
+    // Main registry: core + spawn tool.
+    let registry = tools::build_core_registry(&cfg);
+    registry.register(SpawnTool::new(Arc::clone(&manager)));
 
     let (mut inbound_rx, outbound_tx) = telegram::spawn_telegram(&cfg);
     eprintln!("Telegram poller and sender started");
