@@ -5,11 +5,13 @@ use std::sync::RwLock;
 
 use serde_json::Value;
 
+use crate::config::Config;
 use crate::llm::ToolDef;
 use crate::tools::context::ToolCtx;
 use crate::tools::file::{AppendFile, EditFile, ListDir, ReadFile, WriteFile};
 use crate::tools::message::MessageTool;
 use crate::tools::result::ToolResult;
+use crate::tools::web::{WebFetchTool, WebSearchProvider, WebSearchTool, web_blocking_client};
 
 /// A single tool: name, description, JSON schema for args, and execute.
 pub trait Tool: Send + Sync {
@@ -95,9 +97,11 @@ impl ToolRegistry {
     }
 }
 
-/// Build default registry with file and message tools. Use `Arc::new(build_default_registry())` to share.
-#[inline]
-pub fn build_default_registry() -> ToolRegistry {
+const DEFAULT_BRAVE_MAX_RESULTS: u8 = 5;
+const DEFAULT_WEB_FETCH_MAX_CHARS: u32 = 50_000;
+
+/// Build default registry with file, message, and web tools.
+pub fn build_default_registry(config: &Config) -> ToolRegistry {
     let reg = ToolRegistry::new();
     reg.register(ReadFile);
     reg.register(WriteFile);
@@ -105,6 +109,33 @@ pub fn build_default_registry() -> ToolRegistry {
     reg.register(EditFile);
     reg.register(AppendFile);
     reg.register(MessageTool);
+
+    let web_cfg = config.tools.as_ref().and_then(|t| t.web.as_ref());
+    let brave_max_results = web_cfg
+        .and_then(|w| w.brave_max_results)
+        .unwrap_or(DEFAULT_BRAVE_MAX_RESULTS)
+        .clamp(1, 10);
+    let fetch_max_chars = web_cfg
+        .and_then(|w| w.web_fetch_max_chars)
+        .unwrap_or(DEFAULT_WEB_FETCH_MAX_CHARS);
+
+    if let Ok(client) = web_blocking_client() {
+        let provider = web_cfg
+            .and_then(|w| w.brave_api_key.as_deref())
+            .filter(|k| !k.is_empty())
+            .map(|api_key| {
+                WebSearchProvider::Brave {
+                    api_key: api_key.to_string(),
+                    max_results: brave_max_results,
+                }
+            })
+            .unwrap_or(WebSearchProvider::DuckDuckGo {
+                max_results: brave_max_results,
+            });
+        reg.register(WebSearchTool::new(provider, client.clone()));
+        reg.register(WebFetchTool::new(client, fetch_max_chars));
+    }
+
     reg
 }
 

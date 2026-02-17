@@ -36,7 +36,7 @@ async fn main() {
         .as_ref()
         .and_then(|l| l.model.as_deref())
         .unwrap_or("google/gemini-3-flash-preview");
-    let registry = tools::build_default_registry();
+    let registry = tools::build_default_registry(&cfg);
     let workspace = PathBuf::from(cfg.workspace_path());
     let restrict = cfg.restrict_to_workspace.unwrap_or(true);
 

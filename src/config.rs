@@ -32,6 +32,10 @@ pub struct ToolsConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct WebConfig {
     pub brave_api_key: Option<String>,
+    /// Max results for Brave/DDG search (1–10); default 5.
+    pub brave_max_results: Option<u8>,
+    /// Max chars for web_fetch body; default 50_000.
+    pub web_fetch_max_chars: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
