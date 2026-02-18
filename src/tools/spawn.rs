@@ -116,7 +116,9 @@ mod tests {
         let tool = SpawnTool::new(mgr);
         let mut ctx = test_ctx(true);
         ctx.chat_id = None;
-        let res = tool.execute(&ctx, &serde_json::json!({"task": "do something"})).await;
+        let res = tool
+            .execute(&ctx, &serde_json::json!({"task": "do something"}))
+            .await;
         assert!(res.is_error);
     }
 
@@ -126,7 +128,9 @@ mod tests {
         let tool = SpawnTool::new(mgr);
         let mut ctx = test_ctx(true);
         ctx.outbound_tx = None;
-        let res = tool.execute(&ctx, &serde_json::json!({"task": "do something"})).await;
+        let res = tool
+            .execute(&ctx, &serde_json::json!({"task": "do something"}))
+            .await;
         assert!(res.is_error);
     }
 

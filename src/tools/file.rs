@@ -11,11 +11,7 @@ use crate::tools::result::ToolResult;
 
 /// Resolve path relative to workspace; reject `..` and paths outside workspace when restrict is true.
 /// Does not require the path to exist (for write/append).
-pub async fn resolve_path(
-    path: &str,
-    workspace: &Path,
-    restrict: bool,
-) -> Result<PathBuf, String> {
+pub async fn resolve_path(path: &str, workspace: &Path, restrict: bool) -> Result<PathBuf, String> {
     let path = path.trim();
     if path.is_empty() {
         return Err("path is empty".into());

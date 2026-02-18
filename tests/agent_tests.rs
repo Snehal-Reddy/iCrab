@@ -7,7 +7,7 @@ use icrab::tools::file::{ReadFile, WriteFile};
 use icrab::tools::registry::ToolRegistry;
 
 mod common;
-use common::{TestWorkspace, MockLlm, create_test_config};
+use common::{MockLlm, TestWorkspace, create_test_config};
 
 #[tokio::test]
 async fn test_agent_basic_flow() {
@@ -48,8 +48,9 @@ async fn test_agent_basic_flow() {
         "gpt-4-test",
         "chat_basic",
         "Hi",
-        &ctx
-    ).await;
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "Hello there!");
@@ -74,12 +75,12 @@ async fn test_agent_tool_use_loop() {
     // Sequence of responses from LLM
     // 1. Tool call: write_file
     // 2. Final response: "Done"
-    
-    // We need to match based on the messages sent to the LLM to differentiate calls, 
-    // but wiremock matches are stateless/independent by default unless we use scenarios 
-    // or sequences. 
+
+    // We need to match based on the messages sent to the LLM to differentiate calls,
+    // but wiremock matches are stateless/independent by default unless we use scenarios
+    // or sequences.
     // Since `process_message` makes sequential calls, we can use a sequence of responses?
-    // Wiremock doesn't support stateful sequences easily out of the box without extensions, 
+    // Wiremock doesn't support stateful sequences easily out of the box without extensions,
     // but we can mock based on the 'messages' content in the body.
 
     // 1st request: contains "Write file" (User message)
@@ -120,7 +121,7 @@ async fn test_agent_tool_use_loop() {
     // Mock for 1st call (User asks to write file)
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .and(body_string_contains("Write file")) 
+        .and(body_string_contains("Write file"))
         .respond_with(ResponseTemplate::new(200).set_body_json(tool_call_body))
         .up_to_n_times(1)
         .mount(&mock_llm.server)
@@ -129,7 +130,7 @@ async fn test_agent_tool_use_loop() {
     // Mock for 2nd call (Agent reports result)
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .and(body_string_contains("written")) 
+        .and(body_string_contains("written"))
         .respond_with(ResponseTemplate::new(200).set_body_json(final_body))
         .mount(&mock_llm.server)
         .await;
@@ -149,8 +150,9 @@ async fn test_agent_tool_use_loop() {
         "gpt-4-test",
         "chat_tool",
         "Write file test.txt with success",
-        &ctx
-    ).await;
+        &ctx,
+    )
+    .await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "I have written the file.");

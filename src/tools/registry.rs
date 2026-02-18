@@ -59,12 +59,7 @@ impl ToolRegistry {
     }
 
     /// Execute tool by name. Returns error result if not found.
-    pub async fn execute(
-        &self,
-        ctx: &ToolCtx,
-        name: &str,
-        args: &Value,
-    ) -> ToolResult {
+    pub async fn execute(&self, ctx: &ToolCtx, name: &str, args: &Value) -> ToolResult {
         let tool = {
             let guard = self.inner.read().expect("registry lock");
             guard.get(name).cloned()
@@ -133,11 +128,9 @@ pub fn build_core_registry(config: &Config) -> ToolRegistry {
         let provider = web_cfg
             .and_then(|w| w.brave_api_key.as_deref())
             .filter(|k| !k.is_empty())
-            .map(|api_key| {
-                WebSearchProvider::Brave {
-                    api_key: api_key.to_string(),
-                    max_results: brave_max_results,
-                }
+            .map(|api_key| WebSearchProvider::Brave {
+                api_key: api_key.to_string(),
+                max_results: brave_max_results,
             })
             .unwrap_or(WebSearchProvider::DuckDuckGo {
                 max_results: brave_max_results,
@@ -188,4 +181,3 @@ mod tests {
         assert!(res.for_llm.contains("not found"));
     }
 }
-

@@ -72,7 +72,8 @@ impl Session {
             history: self.history.clone(),
             summary: self.summary.clone(),
         };
-        let json = serde_json::to_string_pretty(&file).map_err(|e| SessionError::Parse(e.to_string()))?;
+        let json =
+            serde_json::to_string_pretty(&file).map_err(|e| SessionError::Parse(e.to_string()))?;
         let tmp = self.path.with_extension("tmp");
         fs::write(&tmp, &json)
             .await

@@ -236,17 +236,9 @@ impl HttpProvider {
             .and_then(|c| c.first())
             .and_then(|choice| {
                 let msg = choice.message.as_ref()?;
-                let content = msg
-                    .content
-                    .as_deref()
-                    .unwrap_or("")
-                    .to_string();
+                let content = msg.content.as_deref().unwrap_or("").to_string();
                 let tool_calls = msg.tool_calls.clone().unwrap_or_default();
-                let finish_reason = choice
-                    .finish_reason
-                    .as_deref()
-                    .unwrap_or("")
-                    .to_string();
+                let finish_reason = choice.finish_reason.as_deref().unwrap_or("").to_string();
                 Some((content, tool_calls, finish_reason))
             })
             .unwrap_or_else(|| (String::new(), Vec::new(), String::new()));
@@ -266,14 +258,12 @@ mod tests {
 
     #[test]
     fn request_body_shape_no_tools() {
-        let messages = vec![
-            Message {
-                role: Role::User,
-                content: "Hi".to_string(),
-                tool_call_id: None,
-                tool_calls: None,
-            },
-        ];
+        let messages = vec![Message {
+            role: Role::User,
+            content: "Hi".to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
         let body = ChatRequest {
             model: "gpt-4",
             messages: &messages,
@@ -316,21 +306,19 @@ mod tests {
 
     #[test]
     fn request_body_assistant_with_tool_calls() {
-        let messages = vec![
-            Message {
-                role: Role::Assistant,
-                content: String::new(),
-                tool_call_id: None,
-                tool_calls: Some(vec![ToolCall {
-                    id: "call_1".to_string(),
-                    type_: "function".to_string(),
-                    function: ToolCallFunction {
-                        name: "read_file".to_string(),
-                        arguments: r#"{"path":"x"}"#.to_string(),
-                    },
-                }]),
-            },
-        ];
+        let messages = vec![Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call_1".to_string(),
+                type_: "function".to_string(),
+                function: ToolCallFunction {
+                    name: "read_file".to_string(),
+                    arguments: r#"{"path":"x"}"#.to_string(),
+                },
+            }]),
+        }];
         let body = ChatRequest {
             model: "gpt-4",
             messages: &messages,
@@ -344,6 +332,9 @@ mod tests {
         assert_eq!(msg["tool_calls"][0]["id"], "call_1");
         assert_eq!(msg["tool_calls"][0]["type"], "function");
         assert_eq!(msg["tool_calls"][0]["function"]["name"], "read_file");
-        assert_eq!(msg["tool_calls"][0]["function"]["arguments"], r#"{"path":"x"}"#);
+        assert_eq!(
+            msg["tool_calls"][0]["function"]["arguments"],
+            r#"{"path":"x"}"#
+        );
     }
 }

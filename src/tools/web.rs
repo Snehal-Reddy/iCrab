@@ -16,10 +16,7 @@ const MAX_REDIRECTS: u32 = 5;
 /// Search provider: Brave API or DuckDuckGo HTML fallback.
 #[derive(Clone)]
 pub enum WebSearchProvider {
-    Brave {
-        api_key: String,
-        max_results: u8,
-    },
+    Brave { api_key: String, max_results: u8 },
     DuckDuckGo { max_results: u8 },
 }
 
@@ -89,11 +86,8 @@ fn format_brave_results(results: &[Value]) -> String {
 }
 
 async fn duckduckgo_search(client: &Client, query: &str, count: u8) -> Result<String, String> {
-    let url = reqwest::Url::parse_with_params(
-        "https://html.duckduckgo.com/html/",
-        &[("q", query)],
-    )
-    .map_err(|e| e.to_string())?;
+    let url = reqwest::Url::parse_with_params("https://html.duckduckgo.com/html/", &[("q", query)])
+        .map_err(|e| e.to_string())?;
     let res = client.get(url).send().await.map_err(|e| e.to_string())?;
     if !res.status().is_success() {
         return Err(format!("DuckDuckGo returned {}", res.status()));
@@ -105,10 +99,8 @@ async fn duckduckgo_search(client: &Client, query: &str, count: u8) -> Result<St
 /// Extract result links and optional snippets from DDG HTML (regex-based).
 fn extract_ddg_results(html: &str, max: u8) -> Result<String, String> {
     // DDG HTML: result links in <a class="result__a" href="...">title</a>, snippet in result__snippet.
-    let link_re = Regex::new(
-        r#"<a\s+class="result__a"[^>]*href="([^"]+)"[^>]*>([^<]*)</a>"#,
-    )
-    .map_err(|e| e.to_string())?;
+    let link_re = Regex::new(r#"<a\s+class="result__a"[^>]*href="([^"]+)"[^>]*>([^<]*)</a>"#)
+        .map_err(|e| e.to_string())?;
     let snippet_re = Regex::new(
         r#"<a\s+class="result__a"[^>]*href="([^"]+)"[^>]*>([^<]*)</a>(?:\s*<div[^>]*>)*\s*<div[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([^<]*)</div>"#,
     )
@@ -179,11 +171,15 @@ fn get_string(args: &Value, key: &str) -> Result<String, String> {
 }
 
 fn get_optional_u8(args: &Value, key: &str) -> Option<u8> {
-    args.get(key).and_then(Value::as_u64).and_then(|n| u8::try_from(n).ok())
+    args.get(key)
+        .and_then(Value::as_u64)
+        .and_then(|n| u8::try_from(n).ok())
 }
 
 fn get_optional_u32(args: &Value, key: &str) -> Option<u32> {
-    args.get(key).and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok())
+    args.get(key)
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
 }
 
 /// web_search tool: Brave API or DuckDuckGo; returns titles, URLs, snippets.
@@ -316,10 +312,13 @@ impl Tool for WebFetchTool {
 
             let text = if content_type.contains("application/json") {
                 match serde_json::from_slice::<Value>(&body) {
-                    Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| String::from_utf8_lossy(&body).into_owned()),
+                    Ok(v) => serde_json::to_string_pretty(&v)
+                        .unwrap_or_else(|_| String::from_utf8_lossy(&body).into_owned()),
                     Err(_) => String::from_utf8_lossy(&body).into_owned(),
                 }
-            } else if content_type.contains("text/html") || content_type.contains("application/xhtml") {
+            } else if content_type.contains("text/html")
+                || content_type.contains("application/xhtml")
+            {
                 let raw = String::from_utf8_lossy(&body).into_owned();
                 html_to_text(&raw)
             } else {
@@ -566,7 +565,13 @@ mod tests {
         let tool = WebSearchTool::new(provider, client);
         assert_eq!(tool.name(), "web_search");
         let params = tool.parameters();
-        assert!(params.get("required").and_then(|r| r.as_array()).unwrap().contains(&serde_json::json!("query")));
+        assert!(
+            params
+                .get("required")
+                .and_then(|r| r.as_array())
+                .unwrap()
+                .contains(&serde_json::json!("query"))
+        );
     }
 
     #[test]
@@ -575,6 +580,12 @@ mod tests {
         let tool = WebFetchTool::new(client, 10_000);
         assert_eq!(tool.name(), "web_fetch");
         let params = tool.parameters();
-        assert!(params.get("required").and_then(|r| r.as_array()).unwrap().contains(&serde_json::json!("url")));
+        assert!(
+            params
+                .get("required")
+                .and_then(|r| r.as_array())
+                .unwrap()
+                .contains(&serde_json::json!("url"))
+        );
     }
 }

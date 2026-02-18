@@ -53,12 +53,15 @@ impl Tool for SubagentTool {
     fn execute<'a>(&'a self, ctx: &'a ToolCtx, args: &'a Value) -> BoxFuture<'a, ToolResult> {
         let manager = self.manager.clone();
         let args = args.clone();
-        
+
         // Clone context components we need for the subagent
         let chat_id = ctx.chat_id;
         let outbound_tx = ctx.outbound_tx.clone();
-        let channel = ctx.channel.clone().unwrap_or_else(|| "telegram".to_string());
-        
+        let channel = ctx
+            .channel
+            .clone()
+            .unwrap_or_else(|| "telegram".to_string());
+
         // We construct a new ToolCtx for the subagent that shares the outbound capabilities
         // of the parent, but uses the manager's workspace config.
         // NOTE: The plan says "Build ToolCtx from manager’s workspace/restrict and current ctx’s chat_id..."
@@ -76,7 +79,7 @@ impl Tool for SubagentTool {
                 _ => return ToolResult::error("missing or empty 'task' argument"),
             };
             let label = args.get("label").and_then(Value::as_str).map(String::from);
-            
+
             // --- Build system prompt (logic duplicated from agent::run_subagent) ---
             let mut system = String::from(
                 "You are a subagent. Complete the given task independently and report the result.
@@ -92,9 +95,11 @@ impl Tool for SubagentTool {
             // Skills
             match skills::build_skills_summary(manager.workspace()) {
                 Ok(ref s) if !s.is_empty() => {
-                    system.push_str("
+                    system.push_str(
+                        "
 --- Skills ---
-");
+",
+                    );
                     system.push_str(s);
                     system.push('\n');
                 }
@@ -110,9 +115,11 @@ impl Tool for SubagentTool {
             // Tool summaries
             let summaries = manager.registry().summaries();
             if !summaries.is_empty() {
-                system.push_str("
+                system.push_str(
+                    "
 --- Tools ---
-");
+",
+                );
                 for line in &summaries {
                     system.push_str(line);
                     system.push('\n');
@@ -147,12 +154,12 @@ impl Tool for SubagentTool {
             {
                 Ok(content) => {
                     let display_label = label.as_deref().unwrap_or("task");
-                    
+
                     // Truncate for user
                     let for_user = if content.len() > 500 {
-                         let mut s = content.chars().take(500).collect::<String>();
-                         s.push_str("...");
-                         s
+                        let mut s = content.chars().take(500).collect::<String>();
+                        s.push_str("...");
+                        s
                     } else {
                         content.clone()
                     };
@@ -217,7 +224,7 @@ mod tests {
             heartbeat: None,
         };
         // This might fail if Config::validate() checks paths, but here we just need types.
-        // Actually HttpProvider::from_config might check stuff. 
+        // Actually HttpProvider::from_config might check stuff.
         // We can reuse the stub_provider pattern from subagent_manager tests if needed.
         // But let's try this.
         let llm = crate::llm::HttpProvider::from_config(&cfg).unwrap();

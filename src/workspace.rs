@@ -34,9 +34,19 @@ pub fn sessions_dir(workspace: &Path) -> PathBuf {
 pub fn session_file(workspace: &Path, chat_id: &str) -> PathBuf {
     let safe: String = chat_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
-    let name = if safe.is_empty() { "default" } else { safe.as_str() };
+    let name = if safe.is_empty() {
+        "default"
+    } else {
+        safe.as_str()
+    };
     sessions_dir(workspace).join(format!("{name}.json"))
 }
 
@@ -56,7 +66,9 @@ pub fn memory_file(workspace: &Path) -> PathBuf {
 #[inline]
 pub fn daily_note_path(workspace: &Path, yyyymmdd: &str) -> PathBuf {
     let (yymm, _) = yyyymmdd.split_at(yyyymmdd.len().min(6));
-    memory_dir(workspace).join(yymm).join(format!("{yyyymmdd}.md"))
+    memory_dir(workspace)
+        .join(yymm)
+        .join(format!("{yyyymmdd}.md"))
 }
 
 /// Path to AGENT.md in workspace root.
@@ -80,21 +92,42 @@ pub fn identity_md(workspace: &Path) -> PathBuf {
 fn month_n(m: Month) -> u8 {
     use Month::*;
     match m {
-        January => 1, February => 2, March => 3, April => 4, May => 5, June => 6,
-        July => 7, August => 8, September => 9, October => 10, November => 11, December => 12,
+        January => 1,
+        February => 2,
+        March => 3,
+        April => 4,
+        May => 5,
+        June => 6,
+        July => 7,
+        August => 8,
+        September => 9,
+        October => 10,
+        November => 11,
+        December => 12,
     }
 }
 
 /// Parse "YYYYMMDD" into Date. Returns None if invalid.
 fn parse_yyyymmdd(s: &str) -> Option<Date> {
-    if s.len() != 8 { return None; }
+    if s.len() != 8 {
+        return None;
+    }
     let y: i32 = s[0..4].parse().ok()?;
     let m: u8 = s[4..6].parse().ok()?;
     let d: u8 = s[6..8].parse().ok()?;
     let month = match m {
-        1 => Month::January, 2 => Month::February, 3 => Month::March, 4 => Month::April,
-        5 => Month::May, 6 => Month::June, 7 => Month::July, 8 => Month::August,
-        9 => Month::September, 10 => Month::October, 11 => Month::November, 12 => Month::December,
+        1 => Month::January,
+        2 => Month::February,
+        3 => Month::March,
+        4 => Month::April,
+        5 => Month::May,
+        6 => Month::June,
+        7 => Month::July,
+        8 => Month::August,
+        9 => Month::September,
+        10 => Month::October,
+        11 => Month::November,
+        12 => Month::December,
         _ => return None,
     };
     Date::from_calendar_date(y, month, d).ok()
@@ -123,8 +156,8 @@ pub fn read_memory_snippet(
     today_yyyymmdd: Option<&str>,
     recent_days: u32,
 ) -> String {
-    let cap = MEMORY_SUMMARY_LEN
-        + (recent_days as usize).saturating_mul(DAILY_NOTE_SUMMARY_LEN + 32);
+    let cap =
+        MEMORY_SUMMARY_LEN + (recent_days as usize).saturating_mul(DAILY_NOTE_SUMMARY_LEN + 32);
     let mut out = String::with_capacity(cap);
     let mem_path = memory_file(workspace);
     if let Ok(s) = fs::read_to_string(&mem_path) {
@@ -138,7 +171,9 @@ pub fn read_memory_snippet(
         }
     }
     let days_to_read = if recent_days == 0 {
-        today_yyyymmdd.map(|s| vec![s.to_string()]).unwrap_or_default()
+        today_yyyymmdd
+            .map(|s| vec![s.to_string()])
+            .unwrap_or_default()
     } else if let Some(today) = today_yyyymmdd {
         recent_daily_dates(today, recent_days).unwrap_or_else(|| vec![today.to_string()])
     } else {
@@ -146,10 +181,14 @@ pub fn read_memory_snippet(
     };
     for yyyymmdd in days_to_read {
         let daily = daily_note_path(workspace, &yyyymmdd);
-        if daily == mem_path { continue; }
+        if daily == mem_path {
+            continue;
+        }
         if let Ok(s) = fs::read_to_string(&daily) {
             let t = s.trim();
-            if t.is_empty() { continue; }
+            if t.is_empty() {
+                continue;
+            }
             out.push_str("\n--- ");
             out.push_str(&yyyymmdd);
             out.push_str(" ---\n");
@@ -172,9 +211,17 @@ mod tests {
     #[test]
     fn session_file_safe_filename() {
         let w = std::path::Path::new("/ws");
-        assert!(session_file(w, "123").to_string_lossy().ends_with("123.json"));
+        assert!(
+            session_file(w, "123")
+                .to_string_lossy()
+                .ends_with("123.json")
+        );
         assert!(session_file(w, "ab:c").to_string_lossy().contains("ab_c"));
-        assert!(session_file(w, "").to_string_lossy().ends_with("default.json"));
+        assert!(
+            session_file(w, "")
+                .to_string_lossy()
+                .ends_with("default.json")
+        );
     }
 
     #[test]

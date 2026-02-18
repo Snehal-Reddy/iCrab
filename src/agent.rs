@@ -7,12 +7,12 @@ use tokio::sync::mpsc;
 
 use crate::agent::session::{Session, SessionError};
 use crate::agent::subagent_manager::{SubagentManager, SubagentStatus};
-use context::build_messages;
 use crate::llm::{HttpProvider, Message, Role};
 use crate::skills::{self, SkillsError};
 use crate::telegram::OutboundMsg;
 use crate::tools::context::ToolCtx;
 use crate::tools::registry::ToolRegistry;
+use context::build_messages;
 
 pub mod context;
 pub mod session;
@@ -121,8 +121,7 @@ pub async fn run_agent_loop(
 
             if let Some(ref text) = result.for_user {
                 if !result.silent {
-                    if let (Some(tx), Some(cid)) =
-                        (tool_ctx.outbound_tx.as_ref(), tool_ctx.chat_id)
+                    if let (Some(tx), Some(cid)) = (tool_ctx.outbound_tx.as_ref(), tool_ctx.chat_id)
                     {
                         let _ = tx.try_send(OutboundMsg {
                             chat_id: cid,

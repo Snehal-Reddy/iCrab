@@ -20,17 +20,27 @@ async fn test_file_ops() {
 
     // 1. Write file
     let write_tool = WriteFile;
-    let res = write_tool.execute(&ctx, &json!({
-        "path": "test.txt",
-        "content": "Hello World"
-    })).await;
+    let res = write_tool
+        .execute(
+            &ctx,
+            &json!({
+                "path": "test.txt",
+                "content": "Hello World"
+            }),
+        )
+        .await;
     assert!(!res.is_error, "Write failed: {}", res.for_llm);
 
     // 2. Read file
     let read_tool = ReadFile;
-    let res = read_tool.execute(&ctx, &json!({
-        "path": "test.txt"
-    })).await;
+    let res = read_tool
+        .execute(
+            &ctx,
+            &json!({
+                "path": "test.txt"
+            }),
+        )
+        .await;
     assert_eq!(res.for_llm, "Hello World");
 
     // 3. List dir
@@ -52,9 +62,14 @@ async fn test_path_traversal() {
     };
 
     let read_tool = ReadFile;
-    let res = read_tool.execute(&ctx, &json!({
-        "path": "../../../etc/passwd"
-    })).await;
+    let res = read_tool
+        .execute(
+            &ctx,
+            &json!({
+                "path": "../../../etc/passwd"
+            }),
+        )
+        .await;
     assert!(res.is_error);
     assert!(res.for_llm.contains("escape"));
 }

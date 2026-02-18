@@ -227,10 +227,7 @@ impl TelegramClient {
                     if text.len() > TELEGRAM_MAX_MESSAGE_LEN
                         && api_err.description.contains("message is too long")
                     {
-                        text = format!(
-                            "{}...",
-                            text.chars().take(TRUNCATE_TO).collect::<String>()
-                        );
+                        text = format!("{}...", text.chars().take(TRUNCATE_TO).collect::<String>());
                         retried = true;
                         continue;
                     }
@@ -295,7 +292,10 @@ async fn poll_loop(
                 offset = max_update_id + 1;
             }
             Err(e) => {
-                eprintln!("telegram getUpdates error: {} (backoff {}s)", e, backoff_secs);
+                eprintln!(
+                    "telegram getUpdates error: {} (backoff {}s)",
+                    e, backoff_secs
+                );
                 tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                 backoff_secs = (backoff_secs * 2).min(30);
             }
@@ -316,17 +316,9 @@ async fn send_loop(client: TelegramClient, mut outbound_rx: mpsc::Receiver<Outbo
 ///
 /// Main holds `inbound_rx` and `outbound_tx`. Poll loop pushes allowed user messages to inbound;
 /// main/agent sends replies via outbound_tx. Shutdown in v1: process kill; later add cancel token.
-pub fn spawn_telegram(
-    config: &Config,
-) -> (mpsc::Receiver<InboundMsg>, mpsc::Sender<OutboundMsg>) {
-    let telegram = config
-        .telegram
-        .as_ref()
-        .expect("config validated");
-    let bot_token = telegram
-        .bot_token
-        .clone()
-        .expect("config validated");
+pub fn spawn_telegram(config: &Config) -> (mpsc::Receiver<InboundMsg>, mpsc::Sender<OutboundMsg>) {
+    let telegram = config.telegram.as_ref().expect("config validated");
+    let bot_token = telegram.bot_token.clone().expect("config validated");
     let allowed_user_ids = telegram.allowed_user_ids.clone();
 
     let client = TelegramClient::new(&bot_token);
@@ -337,15 +329,9 @@ pub fn spawn_telegram(
         client: client.client.clone(),
         base_url: client.base_url.clone(),
     };
-    tokio::spawn(async move {
-        poll_loop(
-            poll_client,
-            bot_token,
-            allowed_user_ids,
-            inbound_tx,
-        )
-        .await
-    });
+    tokio::spawn(
+        async move { poll_loop(poll_client, bot_token, allowed_user_ids, inbound_tx).await },
+    );
 
     tokio::spawn(async move {
         send_loop(client, outbound_rx).await;

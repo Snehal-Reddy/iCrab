@@ -119,10 +119,12 @@ pub fn load(path: &std::path::Path) -> Result<Config, ConfigError> {
     };
 
     // Env overrides (secrets and key vars only)
-    let bot_token = std::env::var("TELEGRAM_BOT_TOKEN")
-        .or_else(|_| std::env::var("ICRAB_TELEGRAM_BOT_TOKEN"));
+    let bot_token =
+        std::env::var("TELEGRAM_BOT_TOKEN").or_else(|_| std::env::var("ICRAB_TELEGRAM_BOT_TOKEN"));
     if let Ok(v) = bot_token {
-        cfg.telegram.get_or_insert_with(TelegramConfig::default).bot_token = Some(v);
+        cfg.telegram
+            .get_or_insert_with(TelegramConfig::default)
+            .bot_token = Some(v);
     }
     if let Ok(v) = std::env::var("ICRAB_WORKSPACE") {
         cfg.workspace = Some(expand_home(&v));
@@ -163,7 +165,9 @@ impl Config {
                 ));
             }
         } else {
-            return Err(ConfigError::Validation("telegram section is required".to_string()));
+            return Err(ConfigError::Validation(
+                "telegram section is required".to_string(),
+            ));
         }
         if let Some(ref l) = self.llm {
             if l.api_key.as_deref().unwrap_or("").trim().is_empty() {
@@ -177,7 +181,9 @@ impl Config {
                 ));
             }
         } else {
-            return Err(ConfigError::Validation("llm section is required".to_string()));
+            return Err(ConfigError::Validation(
+                "llm section is required".to_string(),
+            ));
         }
         Ok(())
     }

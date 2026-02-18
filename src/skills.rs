@@ -138,7 +138,10 @@ pub fn list_skills(workspace: &Path) -> Result<Vec<SkillInfo>, SkillsError> {
 }
 
 fn description_suffix(desc: &str) -> &'static str {
-    if desc.trim_end().ends_with(|c: char| c == '.' || c == '!' || c == '?') {
+    if desc
+        .trim_end()
+        .ends_with(|c: char| c == '.' || c == '!' || c == '?')
+    {
         " "
     } else {
         ". "

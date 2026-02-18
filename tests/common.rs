@@ -15,19 +15,16 @@ impl TestWorkspace {
     pub fn new() -> Self {
         let tmp = TempDir::new().expect("failed to create temp dir");
         let root = tmp.path().to_path_buf();
-        
+
         // Create standard dirs
         std::fs::create_dir_all(root.join("memory")).unwrap();
         std::fs::create_dir_all(root.join("sessions")).unwrap();
         std::fs::create_dir_all(root.join("skills")).unwrap();
-        
+
         // Create empty MEMORY.md
         std::fs::write(root.join("memory/MEMORY.md"), "").unwrap();
 
-        Self {
-            _tmp: tmp,
-            root,
-        }
+        Self { _tmp: tmp, root }
     }
 
     pub fn path(&self) -> &Path {

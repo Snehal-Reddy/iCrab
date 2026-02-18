@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use serde_json::json;
+use std::sync::Arc;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -10,7 +10,7 @@ use icrab::tools::subagent::SubagentTool;
 use icrab::tools::{Tool, ToolCtx};
 
 mod common;
-use common::{TestWorkspace, MockLlm, create_test_config};
+use common::{MockLlm, TestWorkspace, create_test_config};
 
 #[tokio::test]
 async fn subagent_tool_returns_result_synchronously() {
@@ -30,7 +30,7 @@ async fn subagent_tool_returns_result_synchronously() {
         true,
         5,
     ));
-    
+
     let tool = SubagentTool::new(manager);
 
     // Mock response for the subagent's internal LLM call
@@ -55,7 +55,7 @@ async fn subagent_tool_returns_result_synchronously() {
         restrict_to_workspace: true,
         chat_id: Some(123),
         channel: Some("telegram".to_string()),
-        outbound_tx: None, 
+        outbound_tx: None,
     };
 
     let args = json!({
@@ -66,11 +66,18 @@ async fn subagent_tool_returns_result_synchronously() {
     let result = tool.execute(&ctx, &args).await;
 
     // Assertions
-    assert!(!result.is_error, "Result should not be error: {}", result.for_llm);
+    assert!(
+        !result.is_error,
+        "Result should not be error: {}",
+        result.for_llm
+    );
     assert!(!result.async_, "Result should be synchronous");
     assert!(result.for_llm.contains("Subagent 'greet' completed"));
     assert!(result.for_llm.contains("Subagent completed the task."));
-    assert_eq!(result.for_user.as_deref(), Some("Subagent completed the task."));
+    assert_eq!(
+        result.for_user.as_deref(),
+        Some("Subagent completed the task.")
+    );
 }
 
 #[tokio::test]
@@ -81,7 +88,12 @@ async fn subagent_tool_missing_task_returns_error() {
     let provider = Arc::new(HttpProvider::from_config(&config).expect("provider"));
     let registry = Arc::new(ToolRegistry::new());
     let manager = Arc::new(SubagentManager::new(
-        provider, registry, "m".into(), ws.root.clone(), true, 5
+        provider,
+        registry,
+        "m".into(),
+        ws.root.clone(),
+        true,
+        5,
     ));
     let tool = SubagentTool::new(manager);
 

@@ -1,6 +1,6 @@
+use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
-use serde_json::json;
 use tokio::time::sleep;
 
 use icrab::agent::subagent_manager::{SubagentManager, SubagentStatus};
@@ -8,13 +8,13 @@ use icrab::llm::HttpProvider;
 use icrab::tools::registry::ToolRegistry;
 
 mod common;
-use common::{TestWorkspace, MockLlm, create_test_config};
+use common::{MockLlm, TestWorkspace, create_test_config};
 
 #[tokio::test]
 async fn test_subagent_spawn_and_completion() {
     let ws = TestWorkspace::new();
     let mock_llm = MockLlm::new().await;
-    
+
     // Create config pointing to mock LLM
     let config = create_test_config(&ws.root, &mock_llm.endpoint());
     let provider = Arc::new(HttpProvider::from_config(&config).expect("provider"));
@@ -65,7 +65,7 @@ async fn test_subagent_spawn_and_completion() {
     }
 
     assert_eq!(status, SubagentStatus::Completed);
-    
+
     let task = manager.get_task(&task_id).expect("task found");
     assert_eq!(task.result.as_deref(), Some("Task completed successfully."));
 }
@@ -74,7 +74,7 @@ async fn test_subagent_spawn_and_completion() {
 async fn test_subagent_cancellation() {
     let ws = TestWorkspace::new();
     let mock_llm = MockLlm::new().await;
-    
+
     let config = create_test_config(&ws.root, &mock_llm.endpoint());
     let provider = Arc::new(HttpProvider::from_config(&config).expect("provider"));
     let registry = Arc::new(ToolRegistry::new());
@@ -94,14 +94,15 @@ async fn test_subagent_cancellation() {
     // Delay response by 500ms so we have time to cancel
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_json(json!({
-                "choices": [{
-                    "message": { "content": "Done", "role": "assistant" },
-                    "finish_reason": "stop"
-                }]
-            }))
-            .set_delay(Duration::from_millis(500))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({
+                    "choices": [{
+                        "message": { "content": "Done", "role": "assistant" },
+                        "finish_reason": "stop"
+                    }]
+                }))
+                .set_delay(Duration::from_millis(500)),
         )
         .mount(&mock_llm.server)
         .await;
@@ -117,7 +118,7 @@ async fn test_subagent_cancellation() {
 
     // Let it start running
     sleep(Duration::from_millis(50)).await;
-    
+
     // Check it is running
     let task = manager.get_task(&task_id).unwrap();
     assert_eq!(task.status, SubagentStatus::Running);
@@ -141,7 +142,7 @@ async fn test_subagent_cancellation() {
 async fn test_subagent_parallel_execution() {
     let ws = TestWorkspace::new();
     let mock_llm = MockLlm::new().await;
-    
+
     let config = create_test_config(&ws.root, &mock_llm.endpoint());
     let provider = Arc::new(HttpProvider::from_config(&config).expect("provider"));
     let registry = Arc::new(ToolRegistry::new());
@@ -155,28 +156,29 @@ async fn test_subagent_parallel_execution() {
         5,
     ));
 
+    use std::time::Instant;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, ResponseTemplate};
-    use std::time::Instant;
 
     // Response takes 500ms
     let delay_ms = 500;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_json(json!({
-                "choices": [{
-                    "message": { "content": "Done", "role": "assistant" },
-                    "finish_reason": "stop"
-                }]
-            }))
-            .set_delay(Duration::from_millis(delay_ms))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({
+                    "choices": [{
+                        "message": { "content": "Done", "role": "assistant" },
+                        "finish_reason": "stop"
+                    }]
+                }))
+                .set_delay(Duration::from_millis(delay_ms)),
         )
         .mount(&mock_llm.server)
         .await;
 
     let (tx, _rx) = tokio::sync::mpsc::channel(10);
-    
+
     let start_time = Instant::now();
 
     // Spawn 3 subagents
@@ -194,9 +196,10 @@ async fn test_subagent_parallel_execution() {
 
     // Wait for all to complete
     let mut completed_count = 0;
-    for _ in 0..20 { // Max 20 * 100ms = 2s
+    for _ in 0..20 {
+        // Max 20 * 100ms = 2s
         sleep(Duration::from_millis(100)).await;
-        
+
         completed_count = 0;
         for id in &task_ids {
             if let Some(task) = manager.get_task(id) {
@@ -213,10 +216,13 @@ async fn test_subagent_parallel_execution() {
     let duration = start_time.elapsed();
 
     assert_eq!(completed_count, 3, "All tasks should complete");
-    
+
     // If sequential: 3 * 500ms = 1500ms + overhead
     // If parallel: max(500ms) = 500ms + overhead
     // We assert it took less than 1.2s to be safe
     println!("Execution took: {:?}", duration);
-    assert!(duration.as_millis() < (delay_ms as u128 * 2), "Tasks should run in parallel");
+    assert!(
+        duration.as_millis() < (delay_ms as u128 * 2),
+        "Tasks should run in parallel"
+    );
 }
