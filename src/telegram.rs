@@ -133,11 +133,17 @@ struct TelegramClient {
 
 impl TelegramClient {
     fn new(bot_token: &str) -> Self {
+        Self::with_base_url(bot_token, None)
+    }
+
+    fn with_base_url(bot_token: &str, api_base: Option<&str>) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
             .build()
             .expect("reqwest client");
-        let base_url = format!("https://api.telegram.org/bot{}", bot_token);
+        let base_url = api_base
+            .map(|b| format!("{}/bot{}", b.trim_end_matches('/'), bot_token))
+            .unwrap_or_else(|| format!("https://api.telegram.org/bot{}", bot_token));
         Self { client, base_url }
     }
 
@@ -265,6 +271,7 @@ async fn poll_loop(
     let cfg = TelegramConfig {
         bot_token: Some(bot_token),
         allowed_user_ids,
+        api_base: None,
     };
     let mut offset: i64 = 0;
     let mut backoff_secs = 1u64;
@@ -273,23 +280,25 @@ async fn poll_loop(
         match client.get_updates(offset, GET_UPDATES_TIMEOUT_SECS).await {
             Ok(updates) => {
                 backoff_secs = 1;
-                let mut max_update_id = offset;
-                for (update_id, chat_id, user_id, text) in updates {
-                    max_update_id = max_update_id.max(update_id);
-                    if !is_allowed(&cfg, user_id) {
-                        continue;
+                if !updates.is_empty() {
+                    let mut max_update_id = offset;
+                    for (update_id, chat_id, user_id, text) in updates {
+                        max_update_id = max_update_id.max(update_id);
+                        if !is_allowed(&cfg, user_id) {
+                            continue;
+                        }
+                        let msg = InboundMsg {
+                            chat_id,
+                            user_id,
+                            text,
+                            channel: "telegram".to_string(),
+                        };
+                        if inbound_tx.send(msg).await.is_err() {
+                            return;
+                        }
                     }
-                    let msg = InboundMsg {
-                        chat_id,
-                        user_id,
-                        text,
-                        channel: "telegram".to_string(),
-                    };
-                    if inbound_tx.send(msg).await.is_err() {
-                        return;
-                    }
+                    offset = max_update_id + 1;
                 }
-                offset = max_update_id + 1;
             }
             Err(e) => {
                 eprintln!(
@@ -320,8 +329,9 @@ pub fn spawn_telegram(config: &Config) -> (mpsc::Receiver<InboundMsg>, mpsc::Sen
     let telegram = config.telegram.as_ref().expect("config validated");
     let bot_token = telegram.bot_token.clone().expect("config validated");
     let allowed_user_ids = telegram.allowed_user_ids.clone();
+    let api_base = telegram.api_base.as_deref();
 
-    let client = TelegramClient::new(&bot_token);
+    let client = TelegramClient::with_base_url(&bot_token, api_base);
     let (inbound_tx, inbound_rx) = mpsc::channel(CHANNEL_CAP);
     let (outbound_tx, outbound_rx) = mpsc::channel(CHANNEL_CAP);
 

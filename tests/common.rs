@@ -56,12 +56,49 @@ impl MockLlm {
     }
 }
 
+pub struct MockTelegramServer {
+    pub server: MockServer,
+}
+
+impl MockTelegramServer {
+    pub async fn new() -> Self {
+        let server = MockServer::start().await;
+        Self { server }
+    }
+
+    /// Returns the base URL (without /bot{token}) for use in TelegramConfig.api_base
+    pub fn api_base(&self) -> String {
+        self.server.uri()
+    }
+
+    /// Mount a mock for /bot{token}/getUpdates that returns the given JSON body.
+    /// The response should match Telegram's getUpdates API format.
+    pub async fn mock_get_updates(&self, response_body: serde_json::Value) {
+        use wiremock::matchers::path_regex;
+        // Match /bot{anything}/getUpdates
+        Mock::given(method("GET"))
+            .and(path_regex(r"/bot[^/]+/getUpdates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(response_body))
+            .mount(&self.server)
+            .await;
+    }
+}
+
 pub fn create_test_config(workspace: &Path, llm_endpoint: &str) -> Config {
+    create_test_config_with_telegram(workspace, llm_endpoint, None)
+}
+
+pub fn create_test_config_with_telegram(
+    workspace: &Path,
+    llm_endpoint: &str,
+    telegram_api_base: Option<&str>,
+) -> Config {
     Config {
         workspace: Some(workspace.to_string_lossy().to_string()),
         telegram: Some(TelegramConfig {
             bot_token: Some("test_token".to_string()),
             allowed_user_ids: Some(vec![12345]),
+            api_base: telegram_api_base.map(|s| s.to_string()),
         }),
         llm: Some(LlmConfig {
             provider: Some("openai".to_string()), // or openrouter

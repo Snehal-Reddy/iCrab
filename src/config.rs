@@ -43,6 +43,8 @@ pub struct WebConfig {
 pub struct TelegramConfig {
     pub bot_token: Option<String>,
     pub allowed_user_ids: Option<Vec<i64>>,
+    /// Optional API base URL for testing or custom endpoints. Defaults to `https://api.telegram.org/bot{token}`.
+    pub api_base: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
