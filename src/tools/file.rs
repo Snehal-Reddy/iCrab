@@ -317,6 +317,9 @@ impl Tool for AppendFile {
             if let Err(e) = f.write_all(content.as_bytes()).await {
                 return ToolResult::error(e.to_string());
             }
+            if let Err(e) = f.flush().await {
+                return ToolResult::error(e.to_string());
+            }
             ToolResult::ok("appended")
         })
     }
