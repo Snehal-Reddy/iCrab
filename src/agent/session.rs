@@ -132,6 +132,14 @@ impl Session {
     pub fn set_summary(&mut self, s: String) {
         self.summary = s;
     }
+
+    /// Truncate history to last `keep` messages. Does nothing if history.len() <= keep.
+    pub fn truncate_history(&mut self, keep: usize) {
+        if self.history.len() > keep {
+            let start = self.history.len() - keep;
+            self.history.drain(..start);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -213,5 +221,32 @@ mod tests {
         assert_eq!(session.history().len(), MAX_HISTORY);
         assert!(session.history().first().map(|m| m.content.as_str()) == Some("msg 5"));
         let _ = std::fs::remove_dir_all(&w);
+    }
+
+    #[test]
+    fn session_truncate_history() {
+        let w = temp_session_dir("truncate");
+        let path = workspace::session_file(&w, "truncate");
+        let mut session = Session {
+            history: Vec::new(),
+            summary: String::new(),
+            path,
+        };
+        
+        // Add 10 messages
+        for i in 0..10 {
+            session.add_user_message(&format!("msg {}", i));
+        }
+        assert_eq!(session.history().len(), 10);
+        
+        // Truncate to last 4
+        session.truncate_history(4);
+        assert_eq!(session.history().len(), 4);
+        assert_eq!(session.history()[0].content, "msg 6");
+        assert_eq!(session.history()[3].content, "msg 9");
+        
+        // Truncate when already shorter - should do nothing
+        session.truncate_history(10);
+        assert_eq!(session.history().len(), 4);
     }
 }

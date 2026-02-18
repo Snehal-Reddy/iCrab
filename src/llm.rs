@@ -126,6 +126,10 @@ struct ChatRequest<'a> {
     tools: Option<&'a [ToolDef]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -196,6 +200,18 @@ impl HttpProvider {
         tools: &[ToolDef],
         model: &str,
     ) -> Result<LlmResponse, LlmError> {
+        self.chat_with_params(messages, tools, model, None, None).await
+    }
+
+    /// Send chat request with optional temperature and max_tokens. Returns content and tool_calls.
+    pub async fn chat_with_params(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDef],
+        model: &str,
+        temperature: Option<f64>,
+        max_tokens: Option<usize>,
+    ) -> Result<LlmResponse, LlmError> {
         let url = format!("{}/chat/completions", self.api_base);
         let (tools_param, tool_choice) = if tools.is_empty() {
             (None, None)
@@ -207,6 +223,8 @@ impl HttpProvider {
             messages,
             tools: tools_param,
             tool_choice,
+            temperature,
+            max_tokens,
         };
         let res = self
             .client
@@ -269,6 +287,8 @@ mod tests {
             messages: &messages,
             tools: None,
             tool_choice: None,
+            temperature: None,
+            max_tokens: None,
         };
         let json = serde_json::to_value(&body).unwrap();
         assert_eq!(json["model"], "gpt-4");
@@ -297,6 +317,8 @@ mod tests {
             messages: &messages,
             tools: Some(&tools),
             tool_choice: Some("auto"),
+            temperature: None,
+            max_tokens: None,
         };
         let json = serde_json::to_value(&body).unwrap();
         assert_eq!(json["tools"][0]["type"], "function");
@@ -324,6 +346,8 @@ mod tests {
             messages: &messages,
             tools: None,
             tool_choice: None,
+            temperature: None,
+            max_tokens: None,
         };
         let json = serde_json::to_value(&body).unwrap();
         let msg = &json["messages"][0];

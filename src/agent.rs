@@ -17,6 +17,7 @@ use context::build_messages;
 pub mod context;
 pub mod session;
 pub mod subagent_manager;
+pub mod summarize;
 
 const MAX_ITERATIONS: u32 = 20;
 
@@ -163,6 +164,15 @@ pub async fn process_message(
     tool_ctx: &ToolCtx,
 ) -> Result<String, AgentError> {
     let mut session = Session::load(workspace_path, chat_id).await?;
+    
+    // Check if summarization is needed (before building context so summary is included)
+    if session.history().len() > summarize::SUMMARIZE_THRESHOLD {
+        if let Err(e) = summarize::summarize_if_needed(llm, &mut session, model).await {
+            eprintln!("Warning: summarization failed: {}", e);
+            // Continue anyway — summarization is optimization
+        }
+    }
+    
     let skills_summary = skills::build_skills_summary(workspace_path)?;
     let tool_summaries = registry.summaries();
 
