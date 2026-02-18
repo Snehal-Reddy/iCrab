@@ -321,18 +321,21 @@ async fn send_loop(client: TelegramClient, mut outbound_rx: mpsc::Receiver<Outbo
     }
 }
 
-/// Spawns the Telegram poll task and send task; returns channels for main/agent.
+/// Spawns the Telegram poll task and send task; returns outbound sender.
 ///
-/// Main holds `inbound_rx` and `outbound_tx`. Poll loop pushes allowed user messages to inbound;
-/// main/agent sends replies via outbound_tx. Shutdown in v1: process kill; later add cancel token.
-pub fn spawn_telegram(config: &Config) -> (mpsc::Receiver<InboundMsg>, mpsc::Sender<OutboundMsg>) {
+/// Caller creates the inbound channel and passes `inbound_tx` so other producers (e.g. cron runner)
+/// can inject messages. Poll loop pushes allowed user messages to inbound; main/agent sends
+/// replies via returned outbound_tx. Shutdown in v1: process kill; later add cancel token.
+pub fn spawn_telegram(
+    config: &Config,
+    inbound_tx: mpsc::Sender<InboundMsg>,
+) -> mpsc::Sender<OutboundMsg> {
     let telegram = config.telegram.as_ref().expect("config validated");
     let bot_token = telegram.bot_token.clone().expect("config validated");
     let allowed_user_ids = telegram.allowed_user_ids.clone();
     let api_base = telegram.api_base.as_deref();
 
     let client = TelegramClient::with_base_url(&bot_token, api_base);
-    let (inbound_tx, inbound_rx) = mpsc::channel(CHANNEL_CAP);
     let (outbound_tx, outbound_rx) = mpsc::channel(CHANNEL_CAP);
 
     let poll_client = TelegramClient {
@@ -347,5 +350,5 @@ pub fn spawn_telegram(config: &Config) -> (mpsc::Receiver<InboundMsg>, mpsc::Sen
         send_loop(client, outbound_rx).await;
     });
 
-    (inbound_rx, outbound_tx)
+    outbound_tx
 }

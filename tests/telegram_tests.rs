@@ -35,8 +35,9 @@ async fn test_poll_loop_offset_behavior() {
         .mount(&mock_telegram.server)
         .await;
 
-    // Spawn telegram poller
-    let (mut inbound_rx, _outbound_tx) = icrab::telegram::spawn_telegram(&config);
+    // Spawn telegram poller (inbound channel created here so cron runner could share it)
+    let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel(64);
+    let _outbound_tx = icrab::telegram::spawn_telegram(&config, inbound_tx);
 
     // Give it a moment to start
     sleep(Duration::from_millis(100)).await;
@@ -146,7 +147,8 @@ async fn test_poll_loop_empty_updates_do_not_advance_offset() {
         .mount(&mock_telegram.server)
         .await;
 
-    let (_inbound_rx, _outbound_tx) = icrab::telegram::spawn_telegram(&config);
+    let (inbound_tx, _inbound_rx) = tokio::sync::mpsc::channel(64);
+    let _outbound_tx = icrab::telegram::spawn_telegram(&config, inbound_tx);
 
     // Wait for multiple poll cycles
     sleep(Duration::from_millis(500)).await;
@@ -226,7 +228,8 @@ async fn test_disallowed_user_ignored_offset_advances() {
         .mount(&mock_telegram.server)
         .await;
 
-    let (mut inbound_rx, _outbound_tx) = icrab::telegram::spawn_telegram(&config);
+    let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel(64);
+    let _outbound_tx = icrab::telegram::spawn_telegram(&config, inbound_tx);
     sleep(Duration::from_millis(100)).await;
 
     // Exactly one InboundMsg (from allowed user)
@@ -270,7 +273,8 @@ async fn test_transient_api_failure_does_not_advance_offset() {
         .mount(&mock_telegram.server)
         .await;
 
-    let (mut inbound_rx, _outbound_tx) = icrab::telegram::spawn_telegram(&config);
+    let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel(64);
+    let _outbound_tx = icrab::telegram::spawn_telegram(&config, inbound_tx);
     sleep(Duration::from_millis(100)).await;
 
     // Then success with one update (same offset=0 retry)
@@ -339,7 +343,8 @@ async fn test_non_text_update_ignored_offset_advances() {
         .mount(&mock_telegram.server)
         .await;
 
-    let (mut inbound_rx, _outbound_tx) = icrab::telegram::spawn_telegram(&config);
+    let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel(64);
+    let _outbound_tx = icrab::telegram::spawn_telegram(&config, inbound_tx);
     sleep(Duration::from_millis(100)).await;
 
     // No InboundMsg (no text) — recv times out
@@ -380,7 +385,8 @@ async fn test_ok_false_does_not_crash_or_advance_offset() {
         .mount(&mock_telegram.server)
         .await;
 
-    let (_inbound_rx, _outbound_tx) = icrab::telegram::spawn_telegram(&config);
+    let (inbound_tx, _inbound_rx) = tokio::sync::mpsc::channel(64);
+    let _outbound_tx = icrab::telegram::spawn_telegram(&config, inbound_tx);
     sleep(Duration::from_millis(300)).await;
 
     // Then valid response with update so loop can progress

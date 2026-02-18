@@ -89,6 +89,12 @@ pub fn identity_md(workspace: &Path) -> PathBuf {
     workspace.join("IDENTITY.md")
 }
 
+/// Path to cron jobs file: `workspace/cron/jobs.json`.
+#[inline]
+pub fn cron_jobs_file(workspace: &Path) -> PathBuf {
+    workspace.join("cron").join("jobs.json")
+}
+
 fn month_n(m: Month) -> u8 {
     use Month::*;
     match m {

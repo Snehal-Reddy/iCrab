@@ -5,12 +5,16 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use tokio::sync::mpsc;
+
 use icrab::agent;
 use icrab::agent::subagent_manager::SubagentManager;
 use icrab::config;
+use icrab::cron_runner;
 use icrab::llm::HttpProvider;
 use icrab::telegram::{self, OutboundMsg};
 use icrab::tools;
+use icrab::tools::cron::{CronStore, CronTool};
 use icrab::tools::spawn::SpawnTool;
 use icrab::tools::subagent::SubagentTool;
 
@@ -57,13 +61,29 @@ async fn main() {
         SUBAGENT_MAX_ITERATIONS,
     ));
 
-    // Main registry: core + spawn tool.
+    // Main registry: core + spawn + cron (cron is main-agent-only).
     let registry = tools::build_core_registry(&cfg);
     registry.register(SpawnTool::new(Arc::clone(&manager)));
     registry.register(SubagentTool::new(Arc::clone(&manager)));
 
-    let (mut inbound_rx, outbound_tx) = telegram::spawn_telegram(&cfg);
+    let (inbound_tx, mut inbound_rx) = mpsc::channel(64);
+    let outbound_tx = telegram::spawn_telegram(&cfg, inbound_tx.clone());
     eprintln!("Telegram poller and sender started");
+
+    let cron_store = Arc::new(
+        CronStore::load(&workspace).unwrap_or_else(|e| {
+            eprintln!("cron store: {}", e);
+            CronStore::empty(&workspace)
+        }),
+    );
+    cron_runner::spawn_cron_runner(
+        Arc::clone(&cron_store),
+        inbound_tx.clone(),
+        outbound_tx.clone(),
+        60,
+    );
+    registry.register(CronTool::new(Arc::clone(&cron_store)));
+    drop(inbound_tx);
 
     while let Some(msg) = inbound_rx.recv().await {
         let tool_ctx = tools::ToolCtx {
