@@ -12,6 +12,7 @@ use icrab::llm::HttpProvider;
 use icrab::telegram::{self, OutboundMsg};
 use icrab::tools;
 use icrab::tools::spawn::SpawnTool;
+use icrab::tools::subagent::SubagentTool;
 
 const SUBAGENT_MAX_ITERATIONS: u32 = 10;
 
@@ -59,6 +60,7 @@ async fn main() {
     // Main registry: core + spawn tool.
     let registry = tools::build_core_registry(&cfg);
     registry.register(SpawnTool::new(Arc::clone(&manager)));
+    registry.register(SubagentTool::new(Arc::clone(&manager)));
 
     let (mut inbound_rx, outbound_tx) = telegram::spawn_telegram(&cfg);
     eprintln!("Telegram poller and sender started");

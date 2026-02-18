@@ -7,6 +7,7 @@ pub mod message;
 pub mod registry;
 pub mod result;
 pub mod spawn;
+pub mod subagent;
 pub mod web;
 
 pub use context::ToolCtx;
