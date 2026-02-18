@@ -5,12 +5,12 @@
 //! - Non-empty updates should advance offset to max_update_id + 1
 
 use serde_json::json;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use wiremock::matchers::{method, query_param};
 use wiremock::{Mock, ResponseTemplate};
 
 mod common;
-use common::{create_test_config_with_telegram, MockTelegramServer, TestWorkspace};
+use common::{MockTelegramServer, TestWorkspace, create_test_config_with_telegram};
 
 #[tokio::test]
 async fn test_poll_loop_offset_behavior() {
@@ -181,4 +181,225 @@ async fn test_poll_loop_empty_updates_do_not_advance_offset() {
         .await;
 
     sleep(Duration::from_millis(500)).await;
+}
+
+// --- §3.1 Edge cases: disallowed user, API failure, non-text, malformed ---
+
+/// Only the owner should trigger the agent. Disallowed user's update is ignored; offset still
+/// advances so we don't reprocess it.
+#[tokio::test]
+async fn test_disallowed_user_ignored_offset_advances() {
+    let ws = TestWorkspace::new();
+    let mock_telegram = MockTelegramServer::new().await;
+    let config = create_test_config_with_telegram(
+        &ws.root,
+        "http://dummy-llm",
+        Some(&mock_telegram.api_base()),
+    );
+    // allowed_user_ids = [12345] from create_test_config_with_telegram
+
+    // First poll: two updates — one from allowed (12345), one from disallowed (99999)
+    Mock::given(method("GET"))
+        .and(query_param("offset", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "result": [
+                {
+                    "update_id": 10,
+                    "message": {
+                        "from": {"id": 12345},
+                        "chat": {"id": 67890},
+                        "text": "Allowed"
+                    }
+                },
+                {
+                    "update_id": 11,
+                    "message": {
+                        "from": {"id": 99999},
+                        "chat": {"id": 67890},
+                        "text": "Disallowed"
+                    }
+                }
+            ]
+        })))
+        .up_to_n_times(1)
+        .mount(&mock_telegram.server)
+        .await;
+
+    let (mut inbound_rx, _outbound_tx) = icrab::telegram::spawn_telegram(&config);
+    sleep(Duration::from_millis(100)).await;
+
+    // Exactly one InboundMsg (from allowed user)
+    let received = tokio::time::timeout(Duration::from_secs(2), inbound_rx.recv()).await;
+    assert!(received.is_ok(), "Should receive one message");
+    let msg = received.unwrap().expect("Message should be Some");
+    assert_eq!(msg.text, "Allowed");
+    assert_eq!(msg.user_id, 12345);
+    assert_eq!(msg.chat_id, 67890);
+
+    // No second message (disallowed was skipped)
+    Mock::given(method("GET"))
+        .and(query_param("offset", "12"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "result": []
+        })))
+        .up_to_n_times(10)
+        .mount(&mock_telegram.server)
+        .await;
+    sleep(Duration::from_millis(400)).await;
+}
+
+/// On HTTP/5xx error, poll loop does not advance offset; after success we get the update and
+/// subsequent calls use max_update_id + 1.
+#[tokio::test]
+async fn test_transient_api_failure_does_not_advance_offset() {
+    let ws = TestWorkspace::new();
+    let mock_telegram = MockTelegramServer::new().await;
+    let config = create_test_config_with_telegram(
+        &ws.root,
+        "http://dummy-llm",
+        Some(&mock_telegram.api_base()),
+    );
+
+    // First call: 503
+    Mock::given(method("GET"))
+        .and(query_param("offset", "0"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("Service Unavailable"))
+        .up_to_n_times(1)
+        .mount(&mock_telegram.server)
+        .await;
+
+    let (mut inbound_rx, _outbound_tx) = icrab::telegram::spawn_telegram(&config);
+    sleep(Duration::from_millis(100)).await;
+
+    // Then success with one update (same offset=0 retry)
+    Mock::given(method("GET"))
+        .and(query_param("offset", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "result": [{
+                "update_id": 7,
+                "message": {
+                    "from": {"id": 12345},
+                    "chat": {"id": 67890},
+                    "text": "After retry"
+                }
+            }]
+        })))
+        .up_to_n_times(1)
+        .mount(&mock_telegram.server)
+        .await;
+
+    let received = tokio::time::timeout(Duration::from_secs(5), inbound_rx.recv()).await;
+    assert!(
+        received.is_ok(),
+        "Should eventually receive message after retry"
+    );
+    let msg = received.unwrap().expect("Message should be Some");
+    assert_eq!(msg.text, "After retry");
+
+    // Next poll should use offset=8
+    Mock::given(method("GET"))
+        .and(query_param("offset", "8"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "result": []
+        })))
+        .up_to_n_times(5)
+        .mount(&mock_telegram.server)
+        .await;
+    sleep(Duration::from_millis(400)).await;
+}
+
+/// Update with message but no text (e.g. photo) is ignored; offset still advances so we don't refetch.
+#[tokio::test]
+async fn test_non_text_update_ignored_offset_advances() {
+    let ws = TestWorkspace::new();
+    let mock_telegram = MockTelegramServer::new().await;
+    let config = create_test_config_with_telegram(
+        &ws.root,
+        "http://dummy-llm",
+        Some(&mock_telegram.api_base()),
+    );
+
+    Mock::given(method("GET"))
+        .and(query_param("offset", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "result": [{
+                "update_id": 20,
+                "message": {
+                    "from": {"id": 12345},
+                    "chat": {"id": 67890}
+                }
+            }]
+        })))
+        .up_to_n_times(1)
+        .mount(&mock_telegram.server)
+        .await;
+
+    let (mut inbound_rx, _outbound_tx) = icrab::telegram::spawn_telegram(&config);
+    sleep(Duration::from_millis(100)).await;
+
+    // No InboundMsg (no text) — recv times out
+    let no_msg = tokio::time::timeout(Duration::from_millis(600), inbound_rx.recv()).await;
+    assert!(
+        no_msg.is_err(),
+        "No message expected for photo-only update (expected timeout)"
+    );
+
+    // Next poll uses offset=21
+    Mock::given(method("GET"))
+        .and(query_param("offset", "21"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "result": []
+        })))
+        .up_to_n_times(5)
+        .mount(&mock_telegram.server)
+        .await;
+    sleep(Duration::from_millis(300)).await;
+}
+
+/// ok: false or empty result does not crash; empty result does not advance offset.
+#[tokio::test]
+async fn test_ok_false_does_not_crash_or_advance_offset() {
+    let ws = TestWorkspace::new();
+    let mock_telegram = MockTelegramServer::new().await;
+    let config = create_test_config_with_telegram(
+        &ws.root,
+        "http://dummy-llm",
+        Some(&mock_telegram.api_base()),
+    );
+
+    Mock::given(method("GET"))
+        .and(query_param("offset", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "ok": false })))
+        .up_to_n_times(2)
+        .mount(&mock_telegram.server)
+        .await;
+
+    let (_inbound_rx, _outbound_tx) = icrab::telegram::spawn_telegram(&config);
+    sleep(Duration::from_millis(300)).await;
+
+    // Then valid response with update so loop can progress
+    Mock::given(method("GET"))
+        .and(query_param("offset", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "result": [{
+                "update_id": 1,
+                "message": {
+                    "from": {"id": 12345},
+                    "chat": {"id": 67890},
+                    "text": "OK"
+                }
+            }]
+        })))
+        .up_to_n_times(1)
+        .mount(&mock_telegram.server)
+        .await;
+
+    sleep(Duration::from_millis(200)).await;
 }

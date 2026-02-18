@@ -5,6 +5,8 @@ use tokio::time::sleep;
 
 use icrab::agent::subagent_manager::{SubagentManager, SubagentStatus};
 use icrab::llm::HttpProvider;
+use icrab::tools::file::ReadFile;
+use icrab::tools::message::MessageTool;
 use icrab::tools::registry::ToolRegistry;
 
 mod common;
@@ -224,5 +226,290 @@ async fn test_subagent_parallel_execution() {
     assert!(
         duration.as_millis() < (delay_ms as u128 * 2),
         "Tasks should run in parallel"
+    );
+}
+
+// --- §3.4 Subagent result reaches user: subagent calls message → outbound with same chat_id ---
+
+#[tokio::test]
+async fn test_subagent_message_tool_sends_to_outbound() {
+    let ws = TestWorkspace::new();
+    let mock_llm = MockLlm::new().await;
+    let config = create_test_config(&ws.root, &mock_llm.endpoint());
+    let provider = Arc::new(HttpProvider::from_config(&config).expect("provider"));
+
+    let registry = Arc::new(ToolRegistry::new());
+    registry.register(MessageTool);
+
+    let manager = Arc::new(SubagentManager::new(
+        provider,
+        registry,
+        "gpt-4-test".to_string(),
+        ws.root.clone(),
+        true,
+        5,
+    ));
+
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    // 1st subagent LLM call: return message tool call
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("Analyze"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "message": {
+                    "content": null,
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "message",
+                            "arguments": "{\"text\": \"Subagent result for user\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        })))
+        .up_to_n_times(1)
+        .mount(&mock_llm.server)
+        .await;
+
+    // 2nd call: final content
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("sent"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "message": { "content": "Done.", "role": "assistant" },
+                "finish_reason": "stop"
+            }]
+        })))
+        .mount(&mock_llm.server)
+        .await;
+
+    let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(10);
+    let chat_id = 999;
+    let task_id = manager.spawn(
+        "Analyze and report".to_string(),
+        None,
+        chat_id,
+        Arc::new(outbound_tx),
+        "telegram".to_string(),
+    );
+
+    // Receive the message tool output
+    let out = tokio::time::timeout(Duration::from_secs(3), outbound_rx.recv())
+        .await
+        .expect("timeout waiting for outbound message")
+        .expect("channel open");
+    assert_eq!(out.chat_id, chat_id);
+    assert_eq!(out.text, "Subagent result for user");
+
+    // Wait for task to complete
+    for _ in 0..30 {
+        sleep(Duration::from_millis(50)).await;
+        if let Some(task) = manager.get_task(&task_id) {
+            if task.status != SubagentStatus::Running {
+                break;
+            }
+        }
+    }
+    let task = manager.get_task(&task_id).expect("task found");
+    assert_eq!(task.status, SubagentStatus::Completed);
+}
+
+// --- §3.4 Subagent hits max iterations: clear result, no hang ---
+
+#[tokio::test]
+async fn test_subagent_max_iterations_returns_clean_result() {
+    let ws = TestWorkspace::new();
+    let mock_llm = MockLlm::new().await;
+    let config = create_test_config(&ws.root, &mock_llm.endpoint());
+    let provider = Arc::new(HttpProvider::from_config(&config).expect("provider"));
+
+    let registry = Arc::new(ToolRegistry::new());
+    registry.register(ReadFile);
+
+    let manager = Arc::new(SubagentManager::new(
+        provider,
+        registry,
+        "gpt-4-test".to_string(),
+        ws.root.clone(),
+        true,
+        2, // max_iterations = 2
+    ));
+
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    // Every LLM call returns tool_calls so we never get finish_reason: stop
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "message": {
+                    "content": null,
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"path\": \"memory/MEMORY.md\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        })))
+        .mount(&mock_llm.server)
+        .await;
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(10);
+    let task_id = manager.spawn(
+        "Loop task".to_string(),
+        None,
+        1,
+        Arc::new(tx),
+        "telegram".to_string(),
+    );
+
+    for _ in 0..40 {
+        sleep(Duration::from_millis(50)).await;
+        if let Some(task) = manager.get_task(&task_id) {
+            if task.status != SubagentStatus::Running {
+                assert_eq!(task.status, SubagentStatus::Completed);
+                let result = task.result.as_deref().unwrap_or("");
+                assert!(
+                    result.contains("Max iterations"),
+                    "result should indicate max iterations: {}",
+                    result
+                );
+                return;
+            }
+        }
+    }
+    panic!("subagent did not complete within timeout");
+}
+
+// --- §3.4 Main agent does not block on spawn (async path) ---
+
+#[tokio::test]
+async fn test_main_agent_spawn_returns_before_subagent_completes() {
+    use std::time::Instant;
+
+    use icrab::agent::process_message;
+    use icrab::tools::context::ToolCtx;
+    use icrab::tools::spawn::SpawnTool;
+
+    let ws = TestWorkspace::new();
+    let mock_llm = MockLlm::new().await;
+    let config = create_test_config(&ws.root, &mock_llm.endpoint());
+    let provider = Arc::new(HttpProvider::from_config(&config).expect("provider"));
+
+    let subagent_registry = Arc::new(ToolRegistry::new());
+    let manager = Arc::new(SubagentManager::new(
+        Arc::clone(&provider),
+        subagent_registry,
+        "gpt-4-test".to_string(),
+        ws.root.clone(),
+        true,
+        5,
+    ));
+
+    let registry = ToolRegistry::new();
+    registry.register(SpawnTool::new(Arc::clone(&manager)));
+
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    // 1st main agent call: spawn tool
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("Start background"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "message": {
+                    "content": null,
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_spawn",
+                        "type": "function",
+                        "function": {
+                            "name": "spawn",
+                            "arguments": "{\"task\": \"Long task\", \"label\": \"bg\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        })))
+        .up_to_n_times(1)
+        .mount(&mock_llm.server)
+        .await;
+
+    // 2nd main agent call: after spawn tool result "Subagent 'bg' started...", return final reply.
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("Subagent 'bg' started"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "message": { "content": "Task started.", "role": "assistant" },
+                "finish_reason": "stop"
+            }]
+        })))
+        .mount(&mock_llm.server)
+        .await;
+
+    // Subagent LLM: slow response. Match only subagent (system prompt contains this).
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("You are a subagent"))
+        .and(body_string_contains("Long task"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({
+                    "choices": [{
+                        "message": { "content": "Subagent done.", "role": "assistant" },
+                        "finish_reason": "stop"
+                    }]
+                }))
+                .set_delay(Duration::from_millis(800)),
+        )
+        .mount(&mock_llm.server)
+        .await;
+
+    let (_out_tx, _out_rx) = tokio::sync::mpsc::channel(8);
+    let ctx = ToolCtx {
+        workspace: ws.root.clone(),
+        restrict_to_workspace: true,
+        chat_id: Some(1),
+        channel: Some("telegram".into()),
+        outbound_tx: Some(Arc::new(_out_tx)),
+    };
+
+    let start = Instant::now();
+    let result = process_message(
+        provider.as_ref(),
+        &registry,
+        &ws.root,
+        "gpt-4-test",
+        "chat_spawn",
+        "Start background task",
+        &ctx,
+    )
+    .await;
+    let elapsed = start.elapsed();
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), "Task started.");
+    assert!(
+        elapsed.as_millis() < 600,
+        "Main agent should return before subagent (subagent delay 800ms); took {:?}",
+        elapsed
     );
 }
