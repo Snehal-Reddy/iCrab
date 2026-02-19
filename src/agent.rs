@@ -198,6 +198,37 @@ pub async fn process_message(
 }
 
 // ---------------------------------------------------------------------------
+// Heartbeat agent entry point (one-shot, no session)
+// ---------------------------------------------------------------------------
+
+/// One-shot run for heartbeat: same context as `process_message` but with empty
+/// history and summary.  No session load or save.
+pub async fn process_heartbeat_message(
+    llm: &HttpProvider,
+    registry: &ToolRegistry,
+    workspace_path: &Path,
+    model: &str,
+    chat_id: &str,
+    user_message: &str,
+    tool_ctx: &ToolCtx,
+) -> Result<String, AgentError> {
+    let skills_summary = skills::build_skills_summary(workspace_path)?;
+    let tool_summaries = registry.summaries();
+    let today = crate::workspace::today_yyyymmdd();
+    let messages = build_messages(
+        workspace_path,
+        &[],
+        "",
+        user_message,
+        Some(chat_id),
+        &skills_summary,
+        &tool_summaries,
+        Some(&today),
+    );
+    run_agent_loop(llm, registry, messages, tool_ctx, model, MAX_ITERATIONS).await
+}
+
+// ---------------------------------------------------------------------------
 // Subagent runner (background; called by SubagentManager::spawn)
 // ---------------------------------------------------------------------------
 
