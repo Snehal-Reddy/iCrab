@@ -82,24 +82,32 @@ mod tests {
     use super::*;
     use crate::tools::cron::{CronStore, Schedule};
 
+    fn unix_now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
     #[tokio::test]
     async fn tick_fires_due_direct_job() {
         let dir = std::env::temp_dir().join("icrab_cron_runner_direct");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = CronStore::empty(&dir);
+        let base = unix_now();
         store
             .add(
                 None,
                 "Reminder".to_string(),
                 JobAction::Direct,
-                Schedule::Once { at_unix: 100 },
+                Schedule::Once { at_unix: base + 60 },
                 12345,
             )
             .unwrap();
         let (inbound_tx, _inbound_rx) = mpsc::channel(8);
         let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
-        tick_once(&store, &inbound_tx, &outbound_tx, 500).await;
+        tick_once(&store, &inbound_tx, &outbound_tx, base + 61).await;
         let msg = outbound_rx.try_recv().unwrap();
         assert_eq!(msg.chat_id, 12345);
         assert_eq!(msg.text, "Reminder");
@@ -116,18 +124,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = CronStore::empty(&dir);
+        let base = unix_now();
         store
             .add(
                 None,
                 "Agent task".to_string(),
                 JobAction::Agent,
-                Schedule::Once { at_unix: 100 },
+                Schedule::Once { at_unix: base + 60 },
                 999,
             )
             .unwrap();
         let (inbound_tx, mut inbound_rx) = mpsc::channel(8);
         let (outbound_tx, _outbound_rx) = mpsc::channel(8);
-        tick_once(&store, &inbound_tx, &outbound_tx, 500).await;
+        tick_once(&store, &inbound_tx, &outbound_tx, base + 61).await;
         let msg = inbound_rx.try_recv().unwrap();
         assert_eq!(msg.chat_id, 999);
         assert_eq!(msg.text, "Agent task");
@@ -142,18 +151,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = CronStore::empty(&dir);
+        let base = unix_now();
         store
             .add(
                 None,
                 "Later".to_string(),
                 JobAction::Direct,
-                Schedule::Once { at_unix: 99999 },
+                Schedule::Once { at_unix: base + 1000 },
                 1,
             )
             .unwrap();
         let (inbound_tx, _inbound_rx) = mpsc::channel(8);
         let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
-        tick_once(&store, &inbound_tx, &outbound_tx, 500).await;
+        tick_once(&store, &inbound_tx, &outbound_tx, base + 500).await;
         assert!(outbound_rx.try_recv().is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }

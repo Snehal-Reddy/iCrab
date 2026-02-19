@@ -290,6 +290,42 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Parse delay string (e.g. "30m", "2h", "1d") into seconds. Units: s, m, h, d, w.
+fn parse_delay(input: &str) -> Result<u64, CronError> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(CronError::Validation("delay string is empty".into()));
+    }
+    let (num_str, unit) = if input
+        .chars()
+        .last()
+        .map_or(false, |c| c.is_ascii_alphabetic())
+    {
+        let split = input.len() - 1;
+        (&input[..split], &input[split..])
+    } else {
+        (input, "m")
+    };
+    let n: u64 = num_str
+        .trim()
+        .parse()
+        .map_err(|_| CronError::Validation("invalid delay number".into()))?;
+    let multiplier: u64 = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86400,
+        "w" => 604_800,
+        _ => {
+            return Err(CronError::Validation(
+                "unknown delay unit, expected s/m/h/d/w".into(),
+            ))
+        }
+    };
+    n.checked_mul(multiplier)
+        .ok_or_else(|| CronError::Validation("delay value too large".into()))
+}
+
 impl CronStore {
     fn save_inner(jobs: &[CronJob], path: &Path) -> Result<(), CronError> {
         if let Some(parent) = path.parent() {
@@ -346,7 +382,14 @@ impl CronStore {
         }
         let now = unix_now();
         let next_run = match &schedule {
-            Schedule::Once { at_unix } => Some(*at_unix),
+            Schedule::Once { at_unix } => {
+                if *at_unix <= now {
+                    return Err(CronError::Validation(
+                        "Scheduled time must be in the future".into(),
+                    ));
+                }
+                Some(*at_unix)
+            }
             _ => schedule.next_fire_after(now),
         };
         if matches!(&schedule, Schedule::Cron { .. }) && next_run.is_none() {
@@ -490,7 +533,11 @@ impl Tool for CronTool {
                 },
                 "at_unix": {
                     "type": "integer",
-                    "description": "Unix timestamp to fire (for schedule_type=once)"
+                    "description": "Unix timestamp to fire (for schedule_type=once). Use either at_unix or delay, not both."
+                },
+                "delay": {
+                    "type": "string",
+                    "description": "Delay from now for one-shot (for schedule_type=once). E.g. '30m', '2h', '1d', '1w'. Use either delay or at_unix, not both."
                 },
                 "every_seconds": {
                     "type": "integer",
@@ -534,13 +581,30 @@ impl Tool for CronTool {
                     let schedule_type = args.get("schedule_type").and_then(Value::as_str);
                     let schedule = match schedule_type {
                         Some("once") => {
-                            let at_unix = match args.get("at_unix").and_then(Value::as_i64) {
-                                Some(x) => x,
-                                None => return ToolResult::error("once requires 'at_unix'"),
+                            let at_unix_opt = args.get("at_unix").and_then(Value::as_i64);
+                            let delay_opt = args.get("delay").and_then(Value::as_str);
+                            let at_unix = match (at_unix_opt, delay_opt) {
+                                (Some(t), None) => t as u64,
+                                (None, Some(d)) => {
+                                    let secs = match parse_delay(d) {
+                                        Ok(s) => s,
+                                        Err(e) => return ToolResult::error(e.to_string()),
+                                    };
+                                    let now = unix_now();
+                                    now.saturating_add(secs)
+                                }
+                                (None, None) => {
+                                    return ToolResult::error(
+                                        "once requires either 'at_unix' or 'delay' (e.g. '30m', '2h')",
+                                    )
+                                }
+                                (Some(_), Some(_)) => {
+                                    return ToolResult::error(
+                                        "once accepts either 'at_unix' or 'delay', not both",
+                                    )
+                                }
                             };
-                            Schedule::Once {
-                                at_unix: at_unix as u64,
-                            }
+                            Schedule::Once { at_unix }
                         }
                         Some("interval") => {
                             let every = match args.get("every_seconds").and_then(Value::as_i64) {
@@ -790,12 +854,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = CronStore::empty(&dir);
+        let base = unix_now();
         store
             .add(
                 None,
                 "due".into(),
                 JobAction::Direct,
-                Schedule::Once { at_unix: 100 },
+                Schedule::Once { at_unix: base + 100 },
                 1,
             )
             .unwrap();
@@ -804,11 +869,11 @@ mod tests {
                 None,
                 "later".into(),
                 JobAction::Direct,
-                Schedule::Once { at_unix: 99999 },
+                Schedule::Once { at_unix: base + 10_000 },
                 1,
             )
             .unwrap();
-        let due = store.find_due(500);
+        let due = store.find_due(base + 500);
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].message, "due");
         let _ = std::fs::remove_dir_all(&dir);
@@ -820,15 +885,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = CronStore::empty(&dir);
+        let base = unix_now();
         store
-            .add(None, "x".into(), JobAction::Direct, Schedule::Once { at_unix: 100 }, 1)
+            .add(
+                None,
+                "x".into(),
+                JobAction::Direct,
+                Schedule::Once { at_unix: base + 100 },
+                1,
+            )
             .unwrap();
-        store.mark_fired("job-1", 200);
+        store.mark_fired("job-1", base + 100);
         let j = store.get("job-1").unwrap();
         assert!(!j.enabled);
         assert!(j.next_run.is_none());
-        assert_eq!(j.last_run, Some(200));
+        assert_eq!(j.last_run, Some(base + 100));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_once_past_returns_error() {
+        let dir = std::env::temp_dir().join("icrab_cron_test_past");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = CronStore::empty(&dir);
+        let now = unix_now();
+        let err = store
+            .add(
+                None,
+                "x".into(),
+                JobAction::Direct,
+                Schedule::Once { at_unix: now.saturating_sub(1) },
+                1,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("future"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_delay_accepts_units() {
+        assert_eq!(parse_delay("30s").unwrap(), 30);
+        assert_eq!(parse_delay("5m").unwrap(), 300);
+        assert_eq!(parse_delay("2h").unwrap(), 7200);
+        assert_eq!(parse_delay("1d").unwrap(), 86400);
+        assert_eq!(parse_delay("1w").unwrap(), 604_800);
+        assert!(parse_delay("x").is_err());
+        assert!(parse_delay("30x").is_err());
     }
 }
 
@@ -911,6 +1014,115 @@ mod tool_tests {
         let res = tool.execute(&ctx, &args).await;
         assert!(res.is_error);
         assert!(res.for_llm.contains("chat_id"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn cron_tool_add_once_with_delay_success() {
+        let dir = std::env::temp_dir().join("icrab_cron_tool_delay");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(CronStore::empty(&dir));
+        let tool = CronTool::new(Arc::clone(&store));
+        let ctx = empty_ctx(Some(1));
+        let args = serde_json::json!({
+            "action": "add",
+            "message": "Remind me in 5 minutes",
+            "schedule_type": "once",
+            "delay": "5m"
+        });
+        let res = tool.execute(&ctx, &args).await;
+        assert!(!res.is_error, "{}", res.for_llm);
+        assert!(res.for_llm.contains("job-"));
+        let jobs = store.list();
+        assert_eq!(jobs.len(), 1);
+        let next_run = jobs[0].next_run.unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(
+            next_run >= now + 299 && next_run <= now + 301,
+            "next_run should be ~now+300s, got next_run={} now={}",
+            next_run,
+            now
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn cron_tool_add_once_neither_at_unix_nor_delay_returns_error() {
+        let dir = std::env::temp_dir().join("icrab_cron_tool_once_missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(CronStore::empty(&dir));
+        let tool = CronTool::new(store);
+        let ctx = empty_ctx(Some(1));
+        let args = serde_json::json!({
+            "action": "add",
+            "message": "Hi",
+            "schedule_type": "once"
+        });
+        let res = tool.execute(&ctx, &args).await;
+        assert!(res.is_error);
+        assert!(
+            res.for_llm.contains("at_unix") || res.for_llm.contains("delay"),
+            "error should mention at_unix or delay: {}",
+            res.for_llm
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn cron_tool_add_once_both_at_unix_and_delay_returns_error() {
+        let dir = std::env::temp_dir().join("icrab_cron_tool_once_both");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(CronStore::empty(&dir));
+        let tool = CronTool::new(store);
+        let ctx = empty_ctx(Some(1));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let args = serde_json::json!({
+            "action": "add",
+            "message": "Hi",
+            "schedule_type": "once",
+            "at_unix": now + 3600,
+            "delay": "1h"
+        });
+        let res = tool.execute(&ctx, &args).await;
+        assert!(res.is_error);
+        assert!(
+            res.for_llm.contains("not both") || res.for_llm.contains("either"),
+            "error should say not both: {}",
+            res.for_llm
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn cron_tool_add_once_past_at_unix_returns_error() {
+        let dir = std::env::temp_dir().join("icrab_cron_tool_past");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(CronStore::empty(&dir));
+        let tool = CronTool::new(store);
+        let ctx = empty_ctx(Some(1));
+        let args = serde_json::json!({
+            "action": "add",
+            "message": "Too late",
+            "schedule_type": "once",
+            "at_unix": 1
+        });
+        let res = tool.execute(&ctx, &args).await;
+        assert!(res.is_error);
+        assert!(
+            res.for_llm.to_lowercase().contains("future"),
+            "error should mention future: {}",
+            res.for_llm
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

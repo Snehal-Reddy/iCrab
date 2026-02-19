@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use time::OffsetDateTime;
+
 use crate::llm::{Message, Role};
 use crate::workspace;
 
@@ -21,14 +23,14 @@ pub fn build_messages(
 ) -> Vec<Message> {
     let mut system = String::new();
 
-    // Identity: time, workspace
-    let now_utc = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    // Identity: current date/time (human-readable + timezone) and Unix, workspace
+    let now = OffsetDateTime::now_utc();
+    let now_unix = now.unix_timestamp();
     system.push_str("You are iCrab, a minimal personal AI assistant. ");
-    system.push_str("Current time (Unix): ");
-    system.push_str(&now_utc.to_string());
+    system.push_str("Current time: ");
+    system.push_str(&format!("{} {} {} UTC. ", now.weekday(), now.date(), now.time()));
+    system.push_str("Unix: ");
+    system.push_str(&now_unix.to_string());
     system.push_str(". Workspace: ");
     system.push_str(workspace_path.to_string_lossy().as_ref());
     system.push_str(".\n\n");
@@ -110,4 +112,57 @@ pub fn build_messages(
         tool_calls: None,
     });
     messages
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WEEKDAYS: &[&str] = &[
+        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+    ];
+
+    #[test]
+    fn system_prompt_includes_human_readable_time_and_unix() {
+        let workspace = std::env::temp_dir();
+        let messages = build_messages(
+            &workspace,
+            &[],
+            "",
+            "hello",
+            None,
+            "",
+            &[],
+            None,
+        );
+        let system = &messages[0].content;
+        assert!(
+            system.contains("Current time:"),
+            "system prompt should include 'Current time:'"
+        );
+        assert!(
+            system.contains(" UTC."),
+            "system prompt should include ' UTC.'"
+        );
+        assert!(
+            system.contains("Unix: "),
+            "system prompt should include 'Unix: '"
+        );
+        let has_weekday = WEEKDAYS.iter().any(|w| system.contains(w));
+        assert!(
+            has_weekday,
+            "system prompt should include a weekday (e.g. Wednesday)"
+        );
+        // Unix timestamp should be a positive number after "Unix: "
+        let unix_prefix = "Unix: ";
+        let start = system.find(unix_prefix).unwrap() + unix_prefix.len();
+        let rest = &system[start..];
+        let end = rest.find('.').unwrap_or(rest.len());
+        let unix_str = rest[..end].trim();
+        assert!(
+            unix_str.parse::<u64>().is_ok(),
+            "Unix value should be numeric, got: {}",
+            unix_str
+        );
+    }
 }
