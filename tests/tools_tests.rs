@@ -274,6 +274,7 @@ async fn test_message_tool_sends_to_outbound() {
         &registry,
         &ws.root,
         "gpt-4-test",
+        "Europe/London",
         "chat_msg",
         "Use message tool to say Hello from message tool",
         &ctx,

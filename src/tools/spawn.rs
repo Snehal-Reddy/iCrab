@@ -149,6 +149,7 @@ mod tests {
             }),
             tools: None,
             heartbeat: None,
+            timezone: None,
         };
         let llm = crate::llm::HttpProvider::from_config(&cfg).expect("stub");
         SubagentManager::new(

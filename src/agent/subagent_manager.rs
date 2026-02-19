@@ -357,6 +357,7 @@ mod tests {
             }),
             tools: None,
             heartbeat: None,
+            timezone: None,
         };
         HttpProvider::from_config(&cfg).expect("stub provider")
     }

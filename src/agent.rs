@@ -159,6 +159,7 @@ pub async fn process_message(
     registry: &ToolRegistry,
     workspace_path: &Path,
     model: &str,
+    timezone: &str,
     chat_id: &str,
     user_message: &str,
     tool_ctx: &ToolCtx,
@@ -179,6 +180,7 @@ pub async fn process_message(
     let today = crate::workspace::today_yyyymmdd();
     let messages = build_messages(
         workspace_path,
+        timezone,
         session.history(),
         session.summary(),
         user_message,
@@ -208,6 +210,7 @@ pub async fn process_heartbeat_message(
     registry: &ToolRegistry,
     workspace_path: &Path,
     model: &str,
+    timezone: &str,
     chat_id: &str,
     user_message: &str,
     tool_ctx: &ToolCtx,
@@ -217,6 +220,7 @@ pub async fn process_heartbeat_message(
     let today = crate::workspace::today_yyyymmdd();
     let messages = build_messages(
         workspace_path,
+        timezone,
         &[],
         "",
         user_message,

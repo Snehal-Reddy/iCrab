@@ -17,6 +17,11 @@ model = "YOUR_MODEL"
 [heartbeat]
 interval-minutes = 30
 
+# Your IANA timezone name — used for local time in the agent prompt.
+# Handles DST automatically; no need to update when clocks change.
+# Default if absent: Europe/London.
+# timezone = "Europe/London"
+
 # Optional: Brave web search. Leave commented or set ICRAB_TOOLS_WEB_BRAVE_API_KEY in env.
 # [tools.web]
 # brave-api-key = "YOUR_BRAVE_API_KEY"

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use time::OffsetDateTime;
+use chrono::Offset as _;
 
 use crate::llm::{Message, Role};
 use crate::workspace;
@@ -13,6 +13,7 @@ use crate::workspace;
 #[allow(clippy::too_many_arguments)]
 pub fn build_messages(
     workspace_path: &Path,
+    timezone: &str,
     history: &[Message],
     summary: &str,
     user_message: &str,
@@ -23,15 +24,30 @@ pub fn build_messages(
 ) -> Vec<Message> {
     let mut system = String::new();
 
-    // Identity: current date/time (human-readable + timezone) and Unix, workspace
-    let now = OffsetDateTime::now_utc();
-    let now_unix = now.unix_timestamp();
+    // Identity: current local date/time with UTC offset, Unix timestamp, workspace
+    let tz: chrono_tz::Tz = timezone
+        .parse()
+        .expect("timezone was validated at startup; parse cannot fail here");
+    let now_utc = chrono::Utc::now();
+    let now_local = now_utc.with_timezone(&tz);
+    let offset_secs = now_local.offset().fix().local_minus_utc();
+    let offset_hours = offset_secs / 3600;
+    let offset_str = if offset_hours >= 0 {
+        format!("UTC+{}", offset_hours)
+    } else {
+        format!("UTC{}", offset_hours)
+    };
+    let now_unix = now_utc.timestamp();
+    let time_line = format!(
+        "Current time ({}, local): {} ({}). Unix: {}.",
+        offset_str,
+        now_local.format("%A %-d %b %Y %H:%M"),
+        timezone,
+        now_unix,
+    );
     system.push_str("You are iCrab, a minimal personal AI assistant. ");
-    system.push_str("Current time: ");
-    system.push_str(&format!("{} {} {} UTC. ", now.weekday(), now.date(), now.time()));
-    system.push_str("Unix: ");
-    system.push_str(&now_unix.to_string());
-    system.push_str(". Workspace: ");
+    system.push_str(&time_line);
+    system.push_str(" Workspace: ");
     system.push_str(workspace_path.to_string_lossy().as_ref());
     system.push_str(".\n\n");
 
@@ -127,6 +143,7 @@ mod tests {
         let workspace = std::env::temp_dir();
         let messages = build_messages(
             &workspace,
+            "Europe/London",
             &[],
             "",
             "hello",
@@ -137,12 +154,8 @@ mod tests {
         );
         let system = &messages[0].content;
         assert!(
-            system.contains("Current time:"),
-            "system prompt should include 'Current time:'"
-        );
-        assert!(
-            system.contains(" UTC."),
-            "system prompt should include ' UTC.'"
+            system.contains("Current time (UTC"),
+            "system prompt should include 'Current time (UTC'"
         );
         assert!(
             system.contains("Unix: "),

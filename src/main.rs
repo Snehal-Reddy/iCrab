@@ -49,6 +49,11 @@ async fn main() {
         .unwrap_or("google/gemini-3-flash-preview");
     let workspace = PathBuf::from(cfg.workspace_path());
     let restrict = cfg.restrict_to_workspace.unwrap_or(true);
+    let timezone = cfg
+        .timezone
+        .as_deref()
+        .unwrap_or("Europe/London")
+        .to_string();
 
     // Build subagent registry (core only — no spawn, no cron).
     let subagent_registry = Arc::new(tools::build_core_registry(&cfg));
@@ -128,6 +133,7 @@ async fn main() {
                 &registry,
                 &workspace,
                 model,
+                &timezone,
                 &chat_id_str,
                 &msg.text,
                 &tool_ctx,
@@ -146,6 +152,7 @@ async fn main() {
                 &registry,
                 &workspace,
                 model,
+                &timezone,
                 &chat_id_str,
                 &msg.text,
                 &tool_ctx,

@@ -222,6 +222,7 @@ mod tests {
             }),
             tools: None,
             heartbeat: None,
+            timezone: None,
         };
         // This might fail if Config::validate() checks paths, but here we just need types.
         // Actually HttpProvider::from_config might check stuff.

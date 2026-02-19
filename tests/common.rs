@@ -115,5 +115,6 @@ pub fn create_test_config_with_telegram(
         }),
         heartbeat: None,
         restrict_to_workspace: Some(true),
+        timezone: None,
     }
 }

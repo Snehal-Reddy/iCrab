@@ -498,6 +498,7 @@ async fn test_main_agent_spawn_returns_before_subagent_completes() {
         &registry,
         &ws.root,
         "gpt-4-test",
+        "Europe/London",
         "chat_spawn",
         "Start background task",
         &ctx,

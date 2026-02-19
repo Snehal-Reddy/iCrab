@@ -3,7 +3,7 @@
 //! Single file: `~/.icrab/config.toml`. Override path with `ICRAB_CONFIG`.
 //! Env overrides (optional): `TELEGRAM_BOT_TOKEN` or `ICRAB_TELEGRAM_BOT_TOKEN`,
 //! `ICRAB_LLM_API_KEY`, `ICRAB_LLM_API_BASE`, `ICRAB_LLM_MODEL`, `ICRAB_WORKSPACE`,
-//! `ICRAB_TOOLS_WEB_BRAVE_API_KEY`.
+//! `ICRAB_TOOLS_WEB_BRAVE_API_KEY`, `ICRAB_TIMEZONE`.
 
 use std::path::PathBuf;
 
@@ -20,6 +20,8 @@ pub struct Config {
     pub tools: Option<ToolsConfig>,
     pub heartbeat: Option<HeartbeatConfig>,
     pub restrict_to_workspace: Option<bool>,
+    /// IANA timezone name (e.g. "Europe/London"). Default when absent: "Europe/London".
+    pub timezone: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -147,6 +149,9 @@ pub fn load(path: &std::path::Path) -> Result<Config, ConfigError> {
         let web = tools.web.get_or_insert_with(WebConfig::default);
         web.brave_api_key = Some(v);
     }
+    if let Ok(v) = std::env::var("ICRAB_TIMEZONE") {
+        cfg.timezone = Some(v);
+    }
 
     cfg.validate()?;
     Ok(cfg)
@@ -186,6 +191,14 @@ impl Config {
             return Err(ConfigError::Validation(
                 "llm section is required".to_string(),
             ));
+        }
+        if let Some(ref tz) = self.timezone {
+            tz.parse::<chrono_tz::Tz>().map_err(|_| {
+                ConfigError::Validation(format!(
+                    "timezone '{}' is not a valid IANA timezone (e.g. Europe/London, America/New_York)",
+                    tz
+                ))
+            })?;
         }
         Ok(())
     }
