@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use crate::agent::session::{Session, SessionError};
 use crate::agent::subagent_manager::{SubagentManager, SubagentStatus};
 use crate::llm::{HttpProvider, Message, Role};
+use crate::memory::db::BrainDb;
 use crate::skills::{self, SkillsError};
 use crate::telegram::OutboundMsg;
 use crate::tools::context::ToolCtx;
@@ -163,8 +164,9 @@ pub async fn process_message(
     chat_id: &str,
     user_message: &str,
     tool_ctx: &ToolCtx,
+    db: &Arc<BrainDb>,
 ) -> Result<String, AgentError> {
-    let mut session = Session::load(workspace_path, chat_id).await?;
+    let mut session = Session::load(Arc::clone(db), chat_id).await?;
     
     // Check if summarization is needed (before building context so summary is included)
     if session.history().len() > summarize::SUMMARIZE_THRESHOLD {

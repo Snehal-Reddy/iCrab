@@ -14,6 +14,7 @@ use icrab::config;
 use icrab::cron_runner;
 use icrab::heartbeat;
 use icrab::llm::HttpProvider;
+use icrab::memory::db::BrainDb;
 use icrab::telegram::{self, OutboundMsg};
 use icrab::tools;
 use icrab::tools::cron::{CronStore, CronTool};
@@ -54,6 +55,16 @@ async fn main() {
         .as_deref()
         .unwrap_or("Europe/London")
         .to_string();
+
+    // Open the SQLite brain DB once at startup; shared across all message processing.
+    let db = match BrainDb::open(&workspace) {
+        Ok(d) => Arc::new(d),
+        Err(e) => {
+            eprintln!("brain db: {}", e);
+            std::process::exit(1);
+        }
+    };
+    eprintln!("brain db opened: {}", icrab::workspace::brain_db_path(&workspace).display());
 
     // Build subagent registry (core only — no spawn, no cron).
     let subagent_registry = Arc::new(tools::build_core_registry(&cfg));
@@ -156,6 +167,7 @@ async fn main() {
                 &chat_id_str,
                 &msg.text,
                 &tool_ctx,
+                &db,
             )
             .await
             {

@@ -1,8 +1,12 @@
+use std::sync::Arc;
+
 use serde_json::json;
 use wiremock::{Mock, ResponseTemplate};
 
 use icrab::agent::process_message;
+use icrab::agent::session::Session;
 use icrab::llm::HttpProvider;
+use icrab::memory::db::BrainDb;
 use icrab::tools::context::ToolCtx;
 use icrab::tools::file::{ReadFile, WriteFile};
 use icrab::tools::registry::ToolRegistry;
@@ -16,6 +20,7 @@ async fn test_agent_basic_flow() {
     let mock_llm = MockLlm::new().await;
     let config = create_test_config(&ws.root, &mock_llm.endpoint());
     let provider = HttpProvider::from_config(&config).expect("provider");
+    let db = Arc::new(BrainDb::open(&ws.root).unwrap());
 
     // Registry with just file tools
     let registry = ToolRegistry::new();
@@ -51,17 +56,19 @@ async fn test_agent_basic_flow() {
         "chat_basic",
         "Hi",
         &ctx,
+        &db,
     )
     .await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "Hello there!");
 
-    // Verify session was saved
-    let session_path = ws.root.join("sessions/chat_basic.json");
-    assert!(session_path.exists());
-    let content = std::fs::read_to_string(session_path).unwrap();
-    assert!(content.contains("Hello there!"));
+    // Verify session was saved to SQLite
+    let loaded = Session::load(Arc::clone(&db), "chat_basic").await.unwrap();
+    assert!(
+        loaded.history().iter().any(|m| m.content.contains("Hello there!")),
+        "Session should contain the assistant reply"
+    );
 }
 
 #[tokio::test]
@@ -70,6 +77,7 @@ async fn test_agent_tool_use_loop() {
     let mock_llm = MockLlm::new().await;
     let config = create_test_config(&ws.root, &mock_llm.endpoint());
     let provider = HttpProvider::from_config(&config).expect("provider");
+    let db = Arc::new(BrainDb::open(&ws.root).unwrap());
 
     let registry = ToolRegistry::new();
     registry.register(WriteFile);
@@ -154,6 +162,7 @@ async fn test_agent_tool_use_loop() {
         "chat_tool",
         "Write file test.txt with success",
         &ctx,
+        &db,
     )
     .await;
 
@@ -167,7 +176,7 @@ async fn test_agent_tool_use_loop() {
     assert_eq!(content, "success");
 }
 
-// --- §3.2 Restart mid-conversation: session load from disk, prior turns in context ---
+// --- §3.2 Restart mid-conversation: session load from SQLite, prior turns in context ---
 
 #[tokio::test]
 async fn test_agent_session_load_on_restart() {
@@ -175,6 +184,7 @@ async fn test_agent_session_load_on_restart() {
     let mock_llm = MockLlm::new().await;
     let config = create_test_config(&ws.root, &mock_llm.endpoint());
     let provider = HttpProvider::from_config(&config).expect("provider");
+    let db = Arc::new(BrainDb::open(&ws.root).unwrap());
 
     let registry = ToolRegistry::new();
     registry.register(ReadFile);
@@ -212,15 +222,17 @@ async fn test_agent_session_load_on_restart() {
         "chat_restart",
         "First",
         &ctx,
+        &db,
     )
     .await;
     assert!(r1.is_ok());
     assert_eq!(r1.unwrap(), "Got First");
 
-    let session_path = ws.root.join("sessions/chat_restart.json");
+    // Verify session stored in SQLite
+    let s = Session::load(Arc::clone(&db), "chat_restart").await.unwrap();
     assert!(
-        session_path.exists(),
-        "Session file must exist after first message"
+        !s.history().is_empty(),
+        "Session history must be non-empty after first message"
     );
 
     // Second "process" (restart): user says "Second". LLM must see "First" in context.
@@ -248,6 +260,7 @@ async fn test_agent_session_load_on_restart() {
         "chat_restart",
         "Second",
         &ctx,
+        &db,
     )
     .await;
     assert!(r2.is_ok());
@@ -267,6 +280,7 @@ async fn test_agent_unknown_tool_completes_with_error_in_conversation() {
     let mock_llm = MockLlm::new().await;
     let config = create_test_config(&ws.root, &mock_llm.endpoint());
     let provider = HttpProvider::from_config(&config).expect("provider");
+    let db = Arc::new(BrainDb::open(&ws.root).unwrap());
 
     let registry = ToolRegistry::new();
     registry.register(ReadFile);
@@ -326,6 +340,7 @@ async fn test_agent_unknown_tool_completes_with_error_in_conversation() {
         "chat_unknown_tool",
         "Use nonexistent tool",
         &ctx,
+        &db,
     )
     .await;
 
@@ -339,6 +354,7 @@ async fn test_agent_invalid_tool_args_completes_with_error_in_conversation() {
     let mock_llm = MockLlm::new().await;
     let config = create_test_config(&ws.root, &mock_llm.endpoint());
     let provider = HttpProvider::from_config(&config).expect("provider");
+    let db = Arc::new(BrainDb::open(&ws.root).unwrap());
 
     let registry = ToolRegistry::new();
     registry.register(ReadFile);
@@ -398,6 +414,7 @@ async fn test_agent_invalid_tool_args_completes_with_error_in_conversation() {
         "chat_bad_args",
         "Read file foo.txt",
         &ctx,
+        &db,
     )
     .await;
 

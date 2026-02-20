@@ -95,6 +95,19 @@ pub fn cron_jobs_file(workspace: &Path) -> PathBuf {
     workspace.join("cron").join("jobs.json")
 }
 
+/// Path to the iCrab data directory: `workspace/.icrab/`.
+/// Contains SQLite database and other runtime state ignored by Git.
+#[inline]
+pub fn icrab_dir(workspace: &Path) -> PathBuf {
+    workspace.join(".icrab")
+}
+
+/// Path to the SQLite brain database: `workspace/.icrab/brain.db`.
+#[inline]
+pub fn brain_db_path(workspace: &Path) -> PathBuf {
+    icrab_dir(workspace).join("brain.db")
+}
+
 fn month_n(m: Month) -> u8 {
     use Month::*;
     match m {

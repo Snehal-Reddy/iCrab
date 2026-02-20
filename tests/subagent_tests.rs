@@ -492,6 +492,7 @@ async fn test_main_agent_spawn_returns_before_subagent_completes() {
         outbound_tx: Some(Arc::new(_out_tx)),
     };
 
+    let db = std::sync::Arc::new(icrab::memory::db::BrainDb::open(&ws.root).unwrap());
     let start = Instant::now();
     let result = process_message(
         provider.as_ref(),
@@ -502,6 +503,7 @@ async fn test_main_agent_spawn_returns_before_subagent_completes() {
         "chat_spawn",
         "Start background task",
         &ctx,
+        &db,
     )
     .await;
     let elapsed = start.elapsed();

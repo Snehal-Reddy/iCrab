@@ -5,6 +5,7 @@ pub mod config;
 pub mod cron_runner;
 pub mod heartbeat;
 pub mod llm;
+pub mod memory;
 pub mod skills;
 pub mod telegram;
 pub mod tools;

@@ -269,6 +269,7 @@ async fn test_message_tool_sends_to_outbound() {
         .mount(&mock_llm.server)
         .await;
 
+    let db = std::sync::Arc::new(icrab::memory::db::BrainDb::open(&ws.root).unwrap());
     let _ = process_message(
         &provider,
         &registry,
@@ -278,6 +279,7 @@ async fn test_message_tool_sends_to_outbound() {
         "chat_msg",
         "Use message tool to say Hello from message tool",
         &ctx,
+        &db,
     )
     .await
     .expect("process_message should succeed");
