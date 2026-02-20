@@ -5,8 +5,8 @@
 //! Tables:
 //! - `chat_history`  — persistent chat messages per session (replaces sessions/*.json)
 //! - `chat_summary`  — per-session LLM-generated summary string
-//! - `vault_index`   — mirrors Obsidian Markdown files (for Phase 3 indexer)
-//! - `vault_fts`     — FTS5 virtual table with BM25 scoring (for Phase 4 search)
+//! - `vault_index`   — mirrors Obsidian Markdown files
+//! - `vault_fts`     — FTS5 virtual table with BM25 scoring
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -111,14 +111,14 @@ impl BrainDb {
                 summary TEXT NOT NULL DEFAULT ''
             );
 
-            -- ── Vault index (Phase 3 indexer will populate this) ────────────────────
+            -- ── Vault index  ──────────────────────────────────────────────────────
             CREATE TABLE IF NOT EXISTS vault_index (
                 filepath      TEXT    PRIMARY KEY,
                 content       TEXT,
                 last_modified INTEGER
             );
 
-            -- ── Vault FTS5 (Phase 4 search tool will query this) ───────────────────
+            -- ── Vault FTS5  ──────────────────────────────────────────────────────
             CREATE VIRTUAL TABLE IF NOT EXISTS vault_fts USING fts5(
                 filepath, content,
                 content=vault_index,
@@ -239,6 +239,176 @@ impl BrainDb {
             .lock()
             .map(|c| c.execute_batch("SELECT 1").is_ok())
             .unwrap_or(false)
+    }
+
+    // -----------------------------------------------------------------------
+    // Vault index operations
+    // -----------------------------------------------------------------------
+
+    /// Upsert a vault file entry. The triggers in the schema keep `vault_fts`
+    /// in sync automatically on every INSERT OR REPLACE.
+    pub fn upsert_vault_entry(
+        &self,
+        filepath: &str,
+        content: &str,
+        last_modified: i64,
+    ) -> Result<(), DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError(format!("lock: {e}")))?;
+
+        conn.execute(
+            "INSERT OR REPLACE INTO vault_index (filepath, content, last_modified)
+             VALUES (?1, ?2, ?3)",
+            params![filepath, content, last_modified],
+        )?;
+        Ok(())
+    }
+
+    /// Return the stored `last_modified` timestamp for a vault file, or `None`
+    /// if the file has not been indexed yet.
+    pub fn get_vault_last_modified(&self, filepath: &str) -> Result<Option<i64>, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError(format!("lock: {e}")))?;
+
+        match conn.query_row(
+            "SELECT last_modified FROM vault_index WHERE filepath = ?1",
+            params![filepath],
+            |row| row.get(0),
+        ) {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(DbError(e.to_string())),
+        }
+    }
+
+    /// Delete all `vault_index` rows whose filepath is **not** present in
+    /// `known_paths`. Returns the number of rows deleted.
+    ///
+    /// Holds a single lock for the entire operation (no nested locks).
+    pub fn delete_vault_stale(
+        &self,
+        known_paths: &std::collections::HashSet<String>,
+    ) -> Result<usize, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError(format!("lock: {e}")))?;
+
+        // Collect all stored filepaths while holding the lock.
+        let stored: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT filepath FROM vault_index")?;
+            stmt.query_map([], |row| row.get(0))?
+                .collect::<Result<_, _>>()?
+        };
+
+        let mut deleted = 0usize;
+        for fp in stored {
+            if !known_paths.contains(&fp) {
+                deleted +=
+                    conn.execute("DELETE FROM vault_index WHERE filepath = ?1", params![fp])?;
+            }
+        }
+        Ok(deleted)
+    }
+
+    /// Return the filepaths of all entries currently in `vault_index`.
+    pub fn list_vault_filepaths(&self) -> Result<Vec<String>, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError(format!("lock: {e}")))?;
+        let mut stmt = conn.prepare("SELECT filepath FROM vault_index ORDER BY filepath ASC")?;
+        let paths: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(paths)
+    }
+
+    // -----------------------------------------------------------------------
+    // Vault FTS5 queries
+    // -----------------------------------------------------------------------
+
+    /// Count documents whose `vault_fts` entry matches `fts_query` (FTS5
+    /// syntax, e.g. `"\"squats\""` for exact-phrase match).
+    ///
+    /// Useful for diagnostics, testing, and the search tool.
+    pub fn vault_fts_count(&self, fts_query: &str) -> Result<usize, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError(format!("lock: {e}")))?;
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM vault_fts WHERE vault_fts MATCH ?1",
+                params![fts_query],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(DbError::from)?;
+
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        Ok(count as usize)
+    }
+
+    /// Return the stored content of a single vault file, or `None` if not indexed.
+    pub fn get_vault_content(&self, filepath: &str) -> Result<Option<String>, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError(format!("lock: {e}")))?;
+
+        match conn.query_row(
+            "SELECT content FROM vault_index WHERE filepath = ?1",
+            params![filepath],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(c) => Ok(Some(c)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(DbError(e.to_string())),
+        }
+    }
+
+    /// Return a BM25-ranked list of `(filepath, snippet)` pairs for `fts_query`.
+    ///
+    /// `snippet_col` is the FTS5 column index for `snippet()` (-1 = best).
+    /// Returns at most `limit` results.  This is the foundation for the
+    pub fn vault_fts_search(
+        &self,
+        fts_query: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>, DbError> {
+        if fts_query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError(format!("lock: {e}")))?;
+
+        #[allow(clippy::cast_possible_wrap)]
+        let limit_i64 = limit as i64;
+
+        let mut stmt = conn.prepare(
+            "SELECT filepath, snippet(vault_fts, -1, '**', '**', '...', 10) AS snip
+             FROM vault_fts
+             WHERE vault_fts MATCH ?1
+             ORDER BY bm25(vault_fts)
+             LIMIT ?2",
+        )?;
+
+        let rows = stmt.query_map(params![fts_query, limit_i64], |row| {
+            let fp: String = row.get(0)?;
+            let sn: String = row.get(1)?;
+            Ok((fp, sn))
+        })?;
+
+        let results: Vec<(String, String)> = rows.collect::<Result<_, _>>()?;
+        Ok(results)
     }
 }
 
@@ -482,6 +652,109 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1, "vault_fts virtual table should exist");
+    }
+
+    // ── Vault index: BrainDb operations ─────────────────────────────────────
+
+    #[test]
+    fn upsert_vault_entry_and_get_mtime() {
+        let (_tmp, db) = temp_db();
+        db.upsert_vault_entry("Daily log/2026-02-20.md", "Ran 5km today.", 1_708_384_000)
+            .unwrap();
+        let mtime = db
+            .get_vault_last_modified("Daily log/2026-02-20.md")
+            .unwrap();
+        assert_eq!(mtime, Some(1_708_384_000));
+    }
+
+    #[test]
+    fn upsert_vault_entry_replaces_existing() {
+        let (_tmp, db) = temp_db();
+        db.upsert_vault_entry("note.md", "old content", 100).unwrap();
+        db.upsert_vault_entry("note.md", "new content", 200).unwrap();
+
+        let mtime = db.get_vault_last_modified("note.md").unwrap();
+        assert_eq!(mtime, Some(200));
+
+        // FTS5 should see new content, not old
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM vault_fts WHERE vault_fts MATCH '\"new\"'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn get_vault_last_modified_missing() {
+        let (_tmp, db) = temp_db();
+        let mtime = db.get_vault_last_modified("not_indexed.md").unwrap();
+        assert_eq!(mtime, None);
+    }
+
+    #[test]
+    fn list_vault_filepaths_empty() {
+        let (_tmp, db) = temp_db();
+        let paths = db.list_vault_filepaths().unwrap();
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn list_vault_filepaths_sorted() {
+        let (_tmp, db) = temp_db();
+        db.upsert_vault_entry("z.md", "z", 0).unwrap();
+        db.upsert_vault_entry("a.md", "a", 0).unwrap();
+        db.upsert_vault_entry("m.md", "m", 0).unwrap();
+
+        let paths = db.list_vault_filepaths().unwrap();
+        assert_eq!(paths, vec!["a.md", "m.md", "z.md"]);
+    }
+
+    #[test]
+    fn delete_vault_stale_removes_unlisted() {
+        use std::collections::HashSet;
+        let (_tmp, db) = temp_db();
+        db.upsert_vault_entry("keep.md", "kept", 1).unwrap();
+        db.upsert_vault_entry("stale1.md", "gone1", 2).unwrap();
+        db.upsert_vault_entry("stale2.md", "gone2", 3).unwrap();
+
+        let known: HashSet<String> = vec!["keep.md".to_string()].into_iter().collect();
+        let deleted = db.delete_vault_stale(&known).unwrap();
+        assert_eq!(deleted, 2);
+
+        let paths = db.list_vault_filepaths().unwrap();
+        assert_eq!(paths, vec!["keep.md"]);
+    }
+
+    #[test]
+    fn delete_vault_stale_empty_known_deletes_all() {
+        use std::collections::HashSet;
+        let (_tmp, db) = temp_db();
+        db.upsert_vault_entry("a.md", "a", 1).unwrap();
+        db.upsert_vault_entry("b.md", "b", 2).unwrap();
+
+        let known: HashSet<String> = HashSet::new();
+        let deleted = db.delete_vault_stale(&known).unwrap();
+        assert_eq!(deleted, 2);
+        assert!(db.list_vault_filepaths().unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_vault_stale_all_known_deletes_none() {
+        use std::collections::HashSet;
+        let (_tmp, db) = temp_db();
+        db.upsert_vault_entry("a.md", "a", 1).unwrap();
+        db.upsert_vault_entry("b.md", "b", 2).unwrap();
+
+        let known: HashSet<String> = vec!["a.md".to_string(), "b.md".to_string()]
+            .into_iter()
+            .collect();
+        let deleted = db.delete_vault_stale(&known).unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(db.list_vault_filepaths().unwrap().len(), 2);
     }
 
     // ── Vault index: basic insert & fts5 roundtrip ───────────────────────────

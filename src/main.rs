@@ -15,6 +15,8 @@ use icrab::cron_runner;
 use icrab::heartbeat;
 use icrab::llm::HttpProvider;
 use icrab::memory::db::BrainDb;
+use icrab::memory::indexer::VaultIndexer;
+use icrab::tools::SearchVaultTool;
 use icrab::telegram::{self, OutboundMsg};
 use icrab::tools;
 use icrab::tools::cron::{CronStore, CronTool};
@@ -66,8 +68,28 @@ async fn main() {
     };
     eprintln!("brain db opened: {}", icrab::workspace::brain_db_path(&workspace).display());
 
-    // Build subagent registry (core only — no spawn, no cron).
-    let subagent_registry = Arc::new(tools::build_core_registry(&cfg));
+    // Kick off the vault indexer in a background task so startup isn't blocked.
+    // The indexer walks the workspace and upserts any new/modified .md files
+    // into vault_index (FTS5 stays in sync via triggers).  Errors are logged
+    // but never fatal.
+    {
+        let indexer = VaultIndexer::new(Arc::clone(&db));
+        let ws_clone = workspace.clone();
+        tokio::spawn(async move {
+            match tokio::task::spawn_blocking(move || indexer.scan(&ws_clone)).await {
+                Ok(Ok(stats)) => eprintln!("vault index: {stats}"),
+                Ok(Err(e)) => eprintln!("vault index warning: {e}"),
+                Err(e) => eprintln!("vault index task error: {e}"),
+            }
+        });
+    }
+
+    // Build subagent registry (core + search — no spawn, no cron).
+    let subagent_registry = Arc::new({
+        let reg = tools::build_core_registry(&cfg);
+        reg.register(SearchVaultTool::new(Arc::clone(&db)));
+        reg
+    });
 
     // SubagentManager: owns the subagent config and task map.
     let manager = Arc::new(SubagentManager::new(
@@ -79,8 +101,9 @@ async fn main() {
         SUBAGENT_MAX_ITERATIONS,
     ));
 
-    // Main registry: core + spawn + cron (cron is main-agent-only).
+    // Main registry: core + search + spawn + cron (cron is main-agent-only).
     let registry = tools::build_core_registry(&cfg);
+    registry.register(SearchVaultTool::new(Arc::clone(&db)));
     registry.register(SpawnTool::new(Arc::clone(&manager)));
     registry.register(SubagentTool::new(Arc::clone(&manager)));
 
