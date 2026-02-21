@@ -16,7 +16,8 @@ use icrab::heartbeat;
 use icrab::llm::HttpProvider;
 use icrab::memory::db::BrainDb;
 use icrab::memory::indexer::VaultIndexer;
-use icrab::tools::SearchVaultTool;
+use icrab::sync;
+use icrab::tools::{GitSyncTool, GrepDirTool, SearchChatTool, SearchVaultTool};
 use icrab::telegram::{self, OutboundMsg};
 use icrab::tools;
 use icrab::tools::cron::{CronStore, CronTool};
@@ -84,10 +85,23 @@ async fn main() {
         });
     }
 
-    // Build subagent registry (core + search — no spawn, no cron).
+    // Background git pull + re-index loop (every 15 min).
+    sync::spawn_git_pull_loop(
+        workspace.clone(),
+        Arc::clone(&db),
+        sync::DEFAULT_PULL_INTERVAL_SECS,
+    );
+    eprintln!(
+        "background git pull loop started (interval: {}h)",
+        sync::DEFAULT_PULL_INTERVAL_SECS / 3600
+    );
+
+    // Build subagent registry (core + search tools — no spawn, no cron).
     let subagent_registry = Arc::new({
         let reg = tools::build_core_registry(&cfg);
         reg.register(SearchVaultTool::new(Arc::clone(&db)));
+        reg.register(SearchChatTool::new(Arc::clone(&db)));
+        reg.register(GrepDirTool);
         reg
     });
 
@@ -101,9 +115,12 @@ async fn main() {
         SUBAGENT_MAX_ITERATIONS,
     ));
 
-    // Main registry: core + search + spawn + cron (cron is main-agent-only).
+    // Main registry: core + search + git + grep + spawn + cron.
     let registry = tools::build_core_registry(&cfg);
     registry.register(SearchVaultTool::new(Arc::clone(&db)));
+    registry.register(SearchChatTool::new(Arc::clone(&db)));
+    registry.register(GrepDirTool);
+    registry.register(GitSyncTool);
     registry.register(SpawnTool::new(Arc::clone(&manager)));
     registry.register(SubagentTool::new(Arc::clone(&manager)));
 

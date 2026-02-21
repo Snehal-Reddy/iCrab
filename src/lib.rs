@@ -7,6 +7,7 @@ pub mod heartbeat;
 pub mod llm;
 pub mod memory;
 pub mod skills;
+pub mod sync;
 pub mod telegram;
 pub mod tools;
 pub mod workspace;

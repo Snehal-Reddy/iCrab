@@ -111,6 +111,32 @@ impl BrainDb {
                 summary TEXT NOT NULL DEFAULT ''
             );
 
+            -- ── Chat FTS5 ──────────────────────────────────────────────────────────
+            CREATE VIRTUAL TABLE IF NOT EXISTS chat_fts USING fts5(
+                content,
+                content=chat_history,
+                content_rowid=id
+            );
+
+            -- Triggers: keep chat_fts in sync with chat_history
+            CREATE TRIGGER IF NOT EXISTS chat_history_ai
+                AFTER INSERT ON chat_history BEGIN
+                    INSERT INTO chat_fts(rowid, content)
+                    VALUES (new.id, new.content);
+                END;
+            CREATE TRIGGER IF NOT EXISTS chat_history_ad
+                AFTER DELETE ON chat_history BEGIN
+                    INSERT INTO chat_fts(chat_fts, rowid, content)
+                    VALUES ('delete', old.id, old.content);
+                END;
+            CREATE TRIGGER IF NOT EXISTS chat_history_au
+                AFTER UPDATE ON chat_history BEGIN
+                    INSERT INTO chat_fts(chat_fts, rowid, content)
+                    VALUES ('delete', old.id, old.content);
+                    INSERT INTO chat_fts(rowid, content)
+                    VALUES (new.id, new.content);
+                END;
+
             -- ── Vault index  ──────────────────────────────────────────────────────
             CREATE TABLE IF NOT EXISTS vault_index (
                 filepath      TEXT    PRIMARY KEY,
@@ -409,6 +435,47 @@ impl BrainDb {
 
         let results: Vec<(String, String)> = rows.collect::<Result<_, _>>()?;
         Ok(results)
+    }
+
+    /// BM25-ranked keyword search over `chat_fts`.
+    ///
+    /// Returns at most `limit` triples of `(chat_id, role, snippet)`.
+    pub fn chat_fts_search(
+        &self,
+        fts_query: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String, String)>, DbError> {
+        if fts_query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError(format!("lock: {e}")))?;
+
+        #[allow(clippy::cast_possible_wrap)]
+        let limit_i64 = limit as i64;
+
+        let mut stmt = conn.prepare(
+            "SELECT h.chat_id, h.role,
+                    snippet(chat_fts, 0, '**', '**', '...', 10) AS snip
+             FROM chat_fts
+             JOIN chat_history h ON h.id = chat_fts.rowid
+             WHERE chat_fts MATCH ?1
+             ORDER BY bm25(chat_fts)
+             LIMIT ?2",
+        )?;
+
+        let rows = stmt.query_map(params![fts_query, limit_i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+
+        rows.collect::<Result<_, _>>().map_err(DbError::from)
     }
 }
 
@@ -852,6 +919,71 @@ mod tests {
         let (msgs, summary) = db.load_session("unicode").unwrap();
         assert_eq!(msgs[0].content, "こんにちは 🚀 Ñoño");
         assert_eq!(summary, "日本語サマリー");
+    }
+
+    // ── chat_fts: search ─────────────────────────────────────────────────────
+
+    #[test]
+    fn chat_fts_search_finds_saved_message() {
+        let (_tmp, db) = temp_db();
+        db.save_session(
+            "chat1",
+            &[StoredMessage {
+                role: "user".into(),
+                content: "I want to do squats tomorrow".into(),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+            "",
+        )
+        .unwrap();
+
+        let rows = db.chat_fts_search("squats", 5).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "chat1");
+        assert_eq!(rows[0].1, "user");
+        assert!(rows[0].2.contains("squats") || rows[0].2.contains("**"));
+    }
+
+    #[test]
+    fn chat_fts_search_empty_query_returns_empty() {
+        let (_tmp, db) = temp_db();
+        let rows = db.chat_fts_search("   ", 5).unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn chat_fts_search_no_match_returns_empty() {
+        let (_tmp, db) = temp_db();
+        db.save_session(
+            "c",
+            &[StoredMessage {
+                role: "user".into(),
+                content: "hello world".into(),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+            "",
+        )
+        .unwrap();
+        let rows = db.chat_fts_search("squats", 5).unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn chat_fts_search_respects_limit() {
+        let (_tmp, db) = temp_db();
+        let messages: Vec<StoredMessage> = (0..10)
+            .map(|i| StoredMessage {
+                role: "user".into(),
+                content: format!("workout session {i} squats reps"),
+                tool_call_id: None,
+                tool_calls: None,
+            })
+            .collect();
+        db.save_session("bulk", &messages, "").unwrap();
+        let rows = db.chat_fts_search("squats", 3).unwrap();
+        assert!(rows.len() <= 3);
     }
 
     #[test]
