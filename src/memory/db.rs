@@ -68,14 +68,14 @@ impl BrainDb {
         let conn = Connection::open(&db_path)
             .map_err(|e| DbError(format!("open {}: {e}", db_path.display())))?;
 
-        // iSH-optimised PRAGMAs:
-        // WAL + NORMAL sync: durable and 2× faster writes on constrained flash.
-        // mmap 8 MiB: let OS page-cache serve hot reads without extra copies.
+        // iSH-compatible PRAGMAs:
+        // TRUNCATE is safer on iSH's emulated filesystem.
+        // Disable mmap entirely to avoid uncatchable I/O errors and memory pressure.
         // temp_store MEMORY: temp tables never hit slow iSH storage.
         conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
+            "PRAGMA journal_mode = TRUNCATE;
              PRAGMA synchronous  = NORMAL;
-             PRAGMA mmap_size    = 8388608;
+             PRAGMA mmap_size    = 0;
              PRAGMA temp_store   = MEMORY;",
         )?;
 
