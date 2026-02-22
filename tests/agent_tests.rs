@@ -66,7 +66,10 @@ async fn test_agent_basic_flow() {
     // Verify session was saved to SQLite
     let loaded = Session::load(Arc::clone(&db), "chat_basic").await.unwrap();
     assert!(
-        loaded.history().iter().any(|m| m.content.contains("Hello there!")),
+        loaded
+            .history()
+            .iter()
+            .any(|m| m.content.contains("Hello there!")),
         "Session should contain the assistant reply"
     );
 }
@@ -229,7 +232,9 @@ async fn test_agent_session_load_on_restart() {
     assert_eq!(r1.unwrap(), "Got First");
 
     // Verify session stored in SQLite
-    let s = Session::load(Arc::clone(&db), "chat_restart").await.unwrap();
+    let s = Session::load(Arc::clone(&db), "chat_restart")
+        .await
+        .unwrap();
     assert!(
         !s.history().is_empty(),
         "Session history must be non-empty after first message"

@@ -5,8 +5,8 @@
 //! `channel == "heartbeat"` to call `process_heartbeat_message` instead of `process_message`.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -60,7 +60,10 @@ pub fn spawn_heartbeat_runner(
     inbound_tx: mpsc::Sender<InboundMsg>,
     last_chat_id: Arc<AtomicI64>,
 ) -> tokio::task::JoinHandle<()> {
-    assert!(interval_minutes >= 1, "heartbeat interval_minutes must be >= 1");
+    assert!(
+        interval_minutes >= 1,
+        "heartbeat interval_minutes must be >= 1"
+    );
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_minutes * 60));
         // Skip the immediately-firing first tick so the first real tick is one full interval out.

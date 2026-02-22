@@ -167,7 +167,7 @@ pub async fn process_message(
     db: &Arc<BrainDb>,
 ) -> Result<String, AgentError> {
     let mut session = Session::load(Arc::clone(db), chat_id).await?;
-    
+
     // Check if summarization is needed (before building context so summary is included)
     if session.history().len() > summarize::SUMMARIZE_THRESHOLD {
         if let Err(e) = summarize::summarize_if_needed(llm, &mut session, model).await {
@@ -175,7 +175,7 @@ pub async fn process_message(
             // Continue anyway — summarization is optimization
         }
     }
-    
+
     let skills_summary = skills::build_skills_summary(workspace_path)?;
     let tool_summaries = registry.summaries();
 

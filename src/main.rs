@@ -3,8 +3,8 @@
 //! Single binary: runs Telegram poller + agent loop. Config: `~/.icrab/config.toml` or env.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use tokio::sync::mpsc;
 
@@ -17,12 +17,12 @@ use icrab::llm::HttpProvider;
 use icrab::memory::db::BrainDb;
 use icrab::memory::indexer::VaultIndexer;
 use icrab::sync;
-use icrab::tools::{GitSyncTool, GrepDirTool, SearchChatTool, SearchVaultTool};
 use icrab::telegram::{self, OutboundMsg};
 use icrab::tools;
 use icrab::tools::cron::{CronStore, CronTool};
 use icrab::tools::spawn::SpawnTool;
 use icrab::tools::subagent::SubagentTool;
+use icrab::tools::{GitSyncTool, GrepDirTool, SearchChatTool, SearchVaultTool};
 
 const SUBAGENT_MAX_ITERATIONS: u32 = 10;
 
@@ -67,7 +67,10 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    eprintln!("brain db opened: {}", icrab::workspace::brain_db_path(&workspace).display());
+    eprintln!(
+        "brain db opened: {}",
+        icrab::workspace::brain_db_path(&workspace).display()
+    );
 
     // Kick off the vault indexer in a background task so startup isn't blocked.
     // The indexer walks the workspace and upserts any new/modified .md files
@@ -128,12 +131,10 @@ async fn main() {
     let outbound_tx = telegram::spawn_telegram(&cfg, inbound_tx.clone());
     eprintln!("Telegram poller and sender started");
 
-    let cron_store = Arc::new(
-        CronStore::load(&workspace).unwrap_or_else(|e| {
-            eprintln!("cron store: {}", e);
-            CronStore::empty(&workspace)
-        }),
-    );
+    let cron_store = Arc::new(CronStore::load(&workspace).unwrap_or_else(|e| {
+        eprintln!("cron store: {}", e);
+        CronStore::empty(&workspace)
+    }));
     cron_runner::spawn_cron_runner(
         Arc::clone(&cron_store),
         inbound_tx.clone(),
@@ -158,7 +159,10 @@ async fn main() {
             inbound_tx.clone(),
             Arc::clone(&last_chat_id),
         );
-        eprintln!("heartbeat runner started (interval: {} min)", heartbeat_interval);
+        eprintln!(
+            "heartbeat runner started (interval: {} min)",
+            heartbeat_interval
+        );
     }
 
     drop(inbound_tx);

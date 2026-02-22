@@ -92,14 +92,58 @@ async fn run_git(workspace: &std::path::Path, args: &[&str]) -> Result<Output, S
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
 
     tokio::task::spawn_blocking(move || {
-        std::process::Command::new("git")
-            .args(&args)
-            .current_dir(&workspace)
-            .output()
+        // SAFETY: `system` is a standard POSIX libc function. Its C signature is
+        // `int system(const char *command)`. We correctly map `const char *` to
+        // `*const std::ffi::c_char` and `int` to `std::ffi::c_int`.
+        unsafe extern "C" {
+            fn system(command: *const std::ffi::c_char) -> std::ffi::c_int;
+        }
+
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+        let temp_dir = std::env::temp_dir();
+        let pid = std::process::id();
+        let c = COUNTER.fetch_add(1, Ordering::SeqCst);
+
+        let out_file = temp_dir.join(format!("icrab_git_tool_{pid}_{c}.out"));
+        let err_file = temp_dir.join(format!("icrab_git_tool_{pid}_{c}.err"));
+
+        fn escape_sh(s: &str) -> String {
+            format!("'{}'", s.replace("'", "'\\''"))
+        }
+
+        let escaped_args: Vec<String> = args.iter().map(|s| escape_sh(s)).collect();
+        let cmd_str = format!(
+            "cd {} && git {} > {} 2> {}",
+            escape_sh(workspace.to_str().unwrap_or(".")),
+            escaped_args.join(" "),
+            escape_sh(out_file.to_str().unwrap()),
+            escape_sh(err_file.to_str().unwrap())
+        );
+
+        let c_cmd = std::ffi::CString::new(cmd_str).map_err(|e| e.to_string())?;
+        // SAFETY: `c_cmd` is a valid, null-terminated C string created by `CString::new`.
+        // The pointer remains valid for the duration of the `system` call.
+        let status = unsafe { system(c_cmd.as_ptr()) };
+
+        let stdout = std::fs::read(&out_file).unwrap_or_default();
+        let stderr = std::fs::read(&err_file).unwrap_or_default();
+
+        let _ = std::fs::remove_file(&out_file);
+        let _ = std::fs::remove_file(&err_file);
+
+        use std::os::unix::process::ExitStatusExt;
+        let exit_status = std::process::ExitStatus::from_raw(status);
+
+        Ok::<std::process::Output, String>(std::process::Output {
+            status: exit_status,
+            stdout,
+            stderr,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())
 }
 
 fn append_output(log: &mut String, label: &str, out: &Output) {
@@ -140,10 +184,7 @@ mod tests {
     #[test]
     fn tool_name_and_description() {
         assert_eq!(GitSyncTool.name(), "sync_vault");
-        assert!(GitSyncTool
-            .description()
-            .to_lowercase()
-            .contains("commit"));
+        assert!(GitSyncTool.description().to_lowercase().contains("commit"));
     }
 
     #[test]

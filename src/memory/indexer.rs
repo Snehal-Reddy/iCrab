@@ -503,9 +503,21 @@ mod tests {
         let (_db_tmp, db) = temp_db();
 
         // Use the exact same word ("squat") in both files so FTS5 token matches.
-        write_md(ws.path(), "Daily log/2026-02-20.md", "Did squat and bench press today.");
-        write_md(ws.path(), "Workouts/Program.md", "Monday: squat 5x5 at 80kg");
-        write_md(ws.path(), "Ideas.md", "Build an AI assistant for the iPhone.");
+        write_md(
+            ws.path(),
+            "Daily log/2026-02-20.md",
+            "Did squat and bench press today.",
+        );
+        write_md(
+            ws.path(),
+            "Workouts/Program.md",
+            "Monday: squat 5x5 at 80kg",
+        );
+        write_md(
+            ws.path(),
+            "Ideas.md",
+            "Build an AI assistant for the iPhone.",
+        );
 
         scan_vault(ws.path(), &db).unwrap();
 

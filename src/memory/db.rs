@@ -61,8 +61,7 @@ impl BrainDb {
     pub fn open(workspace: &Path) -> Result<Self, DbError> {
         let db_path = workspace::brain_db_path(workspace);
         if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| DbError(format!("create_dir_all: {e}")))?;
+            std::fs::create_dir_all(parent).map_err(|e| DbError(format!("create_dir_all: {e}")))?;
         }
 
         let conn = Connection::open(&db_path)
@@ -194,7 +193,10 @@ impl BrainDb {
 
         conn.execute_batch("BEGIN;")?;
 
-        conn.execute("DELETE FROM chat_history WHERE chat_id = ?1", params![chat_id])?;
+        conn.execute(
+            "DELETE FROM chat_history WHERE chat_id = ?1",
+            params![chat_id],
+        )?;
 
         for msg in messages {
             conn.execute(
@@ -221,10 +223,7 @@ impl BrainDb {
 
     /// Load all messages and the summary for `chat_id`.
     /// Returns `(messages, summary)`. Missing session → empty vec and empty string.
-    pub fn load_session(
-        &self,
-        chat_id: &str,
-    ) -> Result<(Vec<StoredMessage>, String), DbError> {
+    pub fn load_session(&self, chat_id: &str) -> Result<(Vec<StoredMessage>, String), DbError> {
         let conn = self
             .conn
             .lock()
@@ -566,7 +565,8 @@ mod tests {
                 tool_calls: None,
             },
         ];
-        db.save_session("chat1", &messages, "brief summary").unwrap();
+        db.save_session("chat1", &messages, "brief summary")
+            .unwrap();
 
         let (loaded, summary) = db.load_session("chat1").unwrap();
         assert_eq!(loaded.len(), 2);
@@ -737,8 +737,10 @@ mod tests {
     #[test]
     fn upsert_vault_entry_replaces_existing() {
         let (_tmp, db) = temp_db();
-        db.upsert_vault_entry("note.md", "old content", 100).unwrap();
-        db.upsert_vault_entry("note.md", "new content", 200).unwrap();
+        db.upsert_vault_entry("note.md", "old content", 100)
+            .unwrap();
+        db.upsert_vault_entry("note.md", "new content", 200)
+            .unwrap();
 
         let mtime = db.get_vault_last_modified("note.md").unwrap();
         assert_eq!(mtime, Some(200));
@@ -834,7 +836,11 @@ mod tests {
         conn.execute(
             "INSERT INTO vault_index (filepath, content, last_modified)
              VALUES (?1, ?2, ?3)",
-            params!["Daily log/2026-02-20.md", "Did a run today, felt great.", 0i64],
+            params![
+                "Daily log/2026-02-20.md",
+                "Did a run today, felt great.",
+                0i64
+            ],
         )
         .unwrap();
 

@@ -228,10 +228,7 @@ mod tests {
         seed(&db, "c1", "user", "hello world");
 
         let res = SearchChatTool::new(Arc::clone(&db))
-            .execute(
-                &dummy_ctx(),
-                &serde_json::json!({ "query": "AND OR NOT" }),
-            )
+            .execute(&dummy_ctx(), &serde_json::json!({ "query": "AND OR NOT" }))
             .await;
         assert!(!res.is_error, "{}", res.for_llm);
     }

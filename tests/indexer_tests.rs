@@ -59,11 +59,31 @@ fn integration_full_vault_structure() {
     write_md(ws.path(), "IDEAS.md", "Build a personal AI.");
     write_md(ws.path(), "TODO.md", "Deploy iCrab to iSH.");
     write_md(ws.path(), "Daily log/2026-02-19.md", "Ran 5km. Felt great.");
-    write_md(ws.path(), "Daily log/2026-02-20.md", "Bench press PR: 110kg.");
-    write_md(ws.path(), "Workouts/Mixed Program 1.md", "Monday: Squat 5×5.");
-    write_md(ws.path(), "CS Learnings/Rust/Enums.md", "enum Color { Red, Green, Blue }");
-    write_md(ws.path(), "CS Learnings/Rust/Traits.md", "trait Animal { fn sound(&self); }");
-    write_md(ws.path(), "CS Learnings/DSA/BFS.md", "Breadth-first search uses a queue.");
+    write_md(
+        ws.path(),
+        "Daily log/2026-02-20.md",
+        "Bench press PR: 110kg.",
+    );
+    write_md(
+        ws.path(),
+        "Workouts/Mixed Program 1.md",
+        "Monday: Squat 5×5.",
+    );
+    write_md(
+        ws.path(),
+        "CS Learnings/Rust/Enums.md",
+        "enum Color { Red, Green, Blue }",
+    );
+    write_md(
+        ws.path(),
+        "CS Learnings/Rust/Traits.md",
+        "trait Animal { fn sound(&self); }",
+    );
+    write_md(
+        ws.path(),
+        "CS Learnings/DSA/BFS.md",
+        "Breadth-first search uses a queue.",
+    );
 
     let stats = scan_vault(ws.path(), &db).unwrap();
     assert_eq!(stats.indexed, 8);
@@ -225,8 +245,16 @@ fn integration_deleted_file_removed_from_fts5() {
 fn integration_fts5_bm25_search() {
     let (ws, _db_tmp, db) = setup();
 
-    write_md(ws.path(), "Daily log/2026-02-19.md", "Did squat and bench press today.");
-    write_md(ws.path(), "Workouts/Program.md", "Monday: squat 5x5 at 80kg, bench 3x8.");
+    write_md(
+        ws.path(),
+        "Daily log/2026-02-19.md",
+        "Did squat and bench press today.",
+    );
+    write_md(
+        ws.path(),
+        "Workouts/Program.md",
+        "Monday: squat 5x5 at 80kg, bench 3x8.",
+    );
     write_md(ws.path(), "Ideas.md", "Build a personal AI assistant.");
 
     scan_vault(ws.path(), &db).unwrap();
@@ -329,8 +357,14 @@ fn integration_unicode_content_round_trips() {
 
     // The filepath stored will be e.g. "Daily log/日記.md".
     let paths = db.list_vault_filepaths().unwrap();
-    let fp = paths.iter().find(|p| p.contains("日記")).expect("path not found");
-    let stored_content = db.get_vault_content(fp).unwrap().expect("content not found");
+    let fp = paths
+        .iter()
+        .find(|p| p.contains("日記"))
+        .expect("path not found");
+    let stored_content = db
+        .get_vault_content(fp)
+        .unwrap()
+        .expect("content not found");
     assert_eq!(stored_content, content);
 }
 
@@ -343,9 +377,8 @@ fn integration_large_file_indexed() {
     let (ws, _db_tmp, db) = setup();
 
     // 500 KB of content — should not OOM on iSH.
-    let big_content: String = "# Big note\n\n".to_string()
-        + &"Lorem ipsum dolor sit amet consectetur. "
-            .repeat(12_000);
+    let big_content: String =
+        "# Big note\n\n".to_string() + &"Lorem ipsum dolor sit amet consectetur. ".repeat(12_000);
     write_md(ws.path(), "big.md", &big_content);
 
     let stats = scan_vault(ws.path(), &db).unwrap();

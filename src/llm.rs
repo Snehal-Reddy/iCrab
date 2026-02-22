@@ -200,7 +200,8 @@ impl HttpProvider {
         tools: &[ToolDef],
         model: &str,
     ) -> Result<LlmResponse, LlmError> {
-        self.chat_with_params(messages, tools, model, None, None).await
+        self.chat_with_params(messages, tools, model, None, None)
+            .await
     }
 
     /// Send chat request with optional temperature and max_tokens. Returns content and tool_calls.

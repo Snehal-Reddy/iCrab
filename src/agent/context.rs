@@ -135,7 +135,13 @@ mod tests {
     use super::*;
 
     const WEEKDAYS: &[&str] = &[
-        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
     ];
 
     #[test]

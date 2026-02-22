@@ -77,10 +77,12 @@ pub async fn summarize_if_needed(
 
         let s1 = summarize_batch(llm, part1, "", model).await?;
         let s2 = summarize_batch(llm, part2, "", model).await?;
-        merge_summaries(llm, &s1, &s2, model).await.unwrap_or_else(|_| {
-            // Fallback: concatenate
-            format!("{}\n\n{}", s1, s2)
-        })
+        merge_summaries(llm, &s1, &s2, model)
+            .await
+            .unwrap_or_else(|_| {
+                // Fallback: concatenate
+                format!("{}\n\n{}", s1, s2)
+            })
     } else {
         // Single-pass
         summarize_batch(llm, &valid_messages, &existing_summary, model).await?
@@ -121,10 +123,7 @@ fn estimate_tokens(text: &str) -> usize {
     text.chars().count() / 3
 }
 
-fn filter_valid_messages(
-    messages: &[Message],
-    max_tokens: usize,
-) -> (Vec<Message>, bool) {
+fn filter_valid_messages(messages: &[Message], max_tokens: usize) -> (Vec<Message>, bool) {
     let mut valid = Vec::new();
     let mut omitted = false;
 
@@ -205,7 +204,13 @@ async fn summarize_batch(
     ];
 
     let response = llm
-        .chat_with_params(&msgs, &[], model, Some(SUMMARY_TEMPERATURE), Some(SUMMARY_MAX_TOKENS))
+        .chat_with_params(
+            &msgs,
+            &[],
+            model,
+            Some(SUMMARY_TEMPERATURE),
+            Some(SUMMARY_MAX_TOKENS),
+        )
         .await?;
 
     Ok(response.content.trim().to_string())
@@ -230,7 +235,13 @@ async fn merge_summaries(
     }];
 
     let response = llm
-        .chat_with_params(&msgs, &[], model, Some(SUMMARY_TEMPERATURE), Some(SUMMARY_MAX_TOKENS))
+        .chat_with_params(
+            &msgs,
+            &[],
+            model,
+            Some(SUMMARY_TEMPERATURE),
+            Some(SUMMARY_MAX_TOKENS),
+        )
         .await?;
 
     Ok(response.content.trim().to_string())
@@ -242,23 +253,29 @@ mod tests {
 
     #[test]
     fn should_summarize_returns_false_when_below_threshold() {
-        let history = vec![Message {
-            role: Role::User,
-            content: "test".to_string(),
-            tool_call_id: None,
-            tool_calls: None,
-        }; SUMMARIZE_THRESHOLD];
+        let history = vec![
+            Message {
+                role: Role::User,
+                content: "test".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            };
+            SUMMARIZE_THRESHOLD
+        ];
         assert!(!should_summarize(&history));
     }
 
     #[test]
     fn should_summarize_returns_true_when_above_threshold() {
-        let history = vec![Message {
-            role: Role::User,
-            content: "test".to_string(),
-            tool_call_id: None,
-            tool_calls: None,
-        }; SUMMARIZE_THRESHOLD + 1];
+        let history = vec![
+            Message {
+                role: Role::User,
+                content: "test".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            };
+            SUMMARIZE_THRESHOLD + 1
+        ];
         assert!(should_summarize(&history));
     }
 

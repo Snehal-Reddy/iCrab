@@ -32,7 +32,10 @@ pub async fn tick_once(
                     channel: "cron".to_string(),
                 };
                 if inbound_tx.try_send(msg).is_err() {
-                    eprintln!("cron runner: inbound channel full, dropping agent job {}", job.id);
+                    eprintln!(
+                        "cron runner: inbound channel full, dropping agent job {}",
+                        job.id
+                    );
                 }
             }
             JobAction::Direct => {
@@ -42,7 +45,10 @@ pub async fn tick_once(
                     channel: "cron".to_string(),
                 };
                 if outbound_tx.try_send(msg).is_err() {
-                    eprintln!("cron runner: outbound channel full, dropping direct job {}", job.id);
+                    eprintln!(
+                        "cron runner: outbound channel full, dropping direct job {}",
+                        job.id
+                    );
                 }
             }
         }
@@ -157,7 +163,9 @@ mod tests {
                 None,
                 "Later".to_string(),
                 JobAction::Direct,
-                Schedule::Once { at_unix: base + 1000 },
+                Schedule::Once {
+                    at_unix: base + 1000,
+                },
                 1,
             )
             .unwrap();

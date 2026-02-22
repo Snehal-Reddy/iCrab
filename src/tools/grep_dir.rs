@@ -165,9 +165,7 @@ fn walk_and_grep(
                 continue;
             }
             walk_and_grep(&path, re, workspace, matches, max_matches);
-        } else if meta.is_file()
-            && path.extension().and_then(|e| e.to_str()) == Some("md")
-        {
+        } else if meta.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
             let rel = path
                 .strip_prefix(workspace)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -194,11 +192,7 @@ fn walk_and_grep(
     }
 }
 
-fn format_grep_results(
-    pattern: &str,
-    dir_path: &str,
-    matches: &[GrepMatch],
-) -> ToolResult {
+fn format_grep_results(pattern: &str, dir_path: &str, matches: &[GrepMatch]) -> ToolResult {
     if matches.is_empty() {
         return ToolResult::ok(format!(
             "No matches found for pattern \"{}\" in \"{}\".",

@@ -109,8 +109,7 @@ impl Tool for SearchVaultTool {
             // vault_fts_search is synchronous (rusqlite); run off the async
             // thread pool so we don't block the Tokio executor.
             let result =
-                tokio::task::spawn_blocking(move || search_with_fallback(&db, &query, limit))
-                    .await;
+                tokio::task::spawn_blocking(move || search_with_fallback(&db, &query, limit)).await;
 
             match result {
                 Ok(Ok(rows)) => format_results(&rows),
@@ -301,7 +300,11 @@ mod tests {
     #[tokio::test]
     async fn search_result_includes_filepath_and_snippet() {
         let (_tmp, db) = temp_db();
-        index(&db, "Daily log/2026-02-20.md", "Ran 5km today and felt great.");
+        index(
+            &db,
+            "Daily log/2026-02-20.md",
+            "Ran 5km today and felt great.",
+        );
 
         let tool = SearchVaultTool::new(Arc::clone(&db));
         let res = tool
@@ -339,10 +342,7 @@ mod tests {
 
         let tool = SearchVaultTool::new(Arc::clone(&db));
         let res = tool
-            .execute(
-                &dummy_ctx(),
-                &serde_json::json!({ "query": "javascript" }),
-            )
+            .execute(&dummy_ctx(), &serde_json::json!({ "query": "javascript" }))
             .await;
         assert!(!res.is_error);
         assert!(res.for_llm.contains("No matching notes"));
@@ -354,7 +354,11 @@ mod tests {
     async fn search_respects_default_limit() {
         let (_tmp, db) = temp_db();
         for i in 0..10 {
-            index(&db, &format!("note{i}.md"), &format!("common keyword item {i}"));
+            index(
+                &db,
+                &format!("note{i}.md"),
+                &format!("common keyword item {i}"),
+            );
         }
 
         let tool = SearchVaultTool::new(Arc::clone(&db));
@@ -403,10 +407,7 @@ mod tests {
         let tool = SearchVaultTool::new(Arc::clone(&db));
         // Syntactically invalid FTS5 query — should fall back, not error.
         let res = tool
-            .execute(
-                &dummy_ctx(),
-                &serde_json::json!({ "query": "AND OR NOT" }),
-            )
+            .execute(&dummy_ctx(), &serde_json::json!({ "query": "AND OR NOT" }))
             .await;
         // Must not return is_error (the fallback handles invalid syntax).
         assert!(!res.is_error, "unexpected error: {}", res.for_llm);
@@ -457,7 +458,11 @@ mod tests {
     async fn limit_parameter_respected() {
         let (_tmp, db) = temp_db();
         for i in 0..8 {
-            index(&db, &format!("note{i}.md"), &format!("common keyword item {i}"));
+            index(
+                &db,
+                &format!("note{i}.md"),
+                &format!("common keyword item {i}"),
+            );
         }
 
         let tool = SearchVaultTool::new(Arc::clone(&db));
@@ -537,7 +542,10 @@ mod tests {
 
     #[test]
     fn format_results_single_entry() {
-        let rows = vec![("note.md".to_string(), "...some **keyword** here...".to_string())];
+        let rows = vec![(
+            "note.md".to_string(),
+            "...some **keyword** here...".to_string(),
+        )];
         let r = format_results(&rows);
         assert!(!r.is_error);
         assert!(r.for_llm.contains("Found 1 result"));

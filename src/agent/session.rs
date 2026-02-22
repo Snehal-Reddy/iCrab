@@ -59,12 +59,11 @@ impl Session {
         let db_clone = Arc::clone(&db);
         let chat_id_clone = chat_id.clone();
 
-        let (stored, summary) = tokio::task::spawn_blocking(move || {
-            db_clone.load_session(&chat_id_clone)
-        })
-        .await
-        .map_err(|e| SessionError::Db(format!("spawn_blocking: {e}")))?
-        .map_err(SessionError::from)?;
+        let (stored, summary) =
+            tokio::task::spawn_blocking(move || db_clone.load_session(&chat_id_clone))
+                .await
+                .map_err(|e| SessionError::Db(format!("spawn_blocking: {e}")))?
+                .map_err(SessionError::from)?;
 
         let history = stored
             .into_iter()
@@ -193,10 +192,7 @@ fn message_to_stored(msg: &Message) -> Result<StoredMessage, SessionError> {
     let tool_calls = msg
         .tool_calls
         .as_ref()
-        .map(|tc| {
-            serde_json::to_string(tc)
-                .map_err(|e| SessionError::Serialize(e.to_string()))
-        })
+        .map(|tc| serde_json::to_string(tc).map_err(|e| SessionError::Serialize(e.to_string())))
         .transpose()?;
 
     Ok(StoredMessage {

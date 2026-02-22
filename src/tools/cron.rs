@@ -88,7 +88,9 @@ fn parse_field(token: &str, min: u8, max: u8) -> Result<Vec<u8>, CronError> {
             continue;
         }
         if let Some(rest) = part.strip_prefix("*/") {
-            let step: u8 = rest.parse().map_err(|_| CronError::Validation("invalid step".into()))?;
+            let step: u8 = rest
+                .parse()
+                .map_err(|_| CronError::Validation("invalid step".into()))?;
             if step == 0 {
                 return Err(CronError::Validation("step must be positive".into()));
             }
@@ -100,15 +102,32 @@ fn parse_field(token: &str, min: u8, max: u8) -> Result<Vec<u8>, CronError> {
             continue;
         }
         if let Some(range) = part.split_once('-') {
-            let start: u8 = range.0.trim().parse().map_err(|_| CronError::Validation("invalid range start".into()))?;
-            let end: u8 = range.1.trim().split('/').next().unwrap_or(range.1.trim()).parse().map_err(|_| CronError::Validation("invalid range end".into()))?;
+            let start: u8 = range
+                .0
+                .trim()
+                .parse()
+                .map_err(|_| CronError::Validation("invalid range start".into()))?;
+            let end: u8 = range
+                .1
+                .trim()
+                .split('/')
+                .next()
+                .unwrap_or(range.1.trim())
+                .parse()
+                .map_err(|_| CronError::Validation("invalid range end".into()))?;
             if start > end {
                 return Err(CronError::Validation("range start > end".into()));
             }
             if start < min || end > max {
                 return Err(CronError::Validation("range out of bounds".into()));
             }
-            let step: u8 = range.1.trim().split('/').nth(1).map(|s| s.parse().unwrap_or(1)).unwrap_or(1);
+            let step: u8 = range
+                .1
+                .trim()
+                .split('/')
+                .nth(1)
+                .map(|s| s.parse().unwrap_or(1))
+                .unwrap_or(1);
             let mut v = start;
             while v <= end {
                 out.push(v);
@@ -116,7 +135,9 @@ fn parse_field(token: &str, min: u8, max: u8) -> Result<Vec<u8>, CronError> {
             }
             continue;
         }
-        let single: u8 = part.parse().map_err(|_| CronError::Validation("invalid number".into()))?;
+        let single: u8 = part
+            .parse()
+            .map_err(|_| CronError::Validation("invalid number".into()))?;
         if single < min || single > max {
             return Err(CronError::Validation("value out of range".into()));
         }
@@ -133,7 +154,9 @@ fn parse_field(token: &str, min: u8, max: u8) -> Result<Vec<u8>, CronError> {
 pub fn parse_cron_expr(expr: &str) -> Result<CronExpr, CronError> {
     let tokens: Vec<&str> = expr.split_whitespace().collect();
     if tokens.len() != 5 {
-        return Err(CronError::Validation("cron expression must have exactly 5 fields (minute hour dom month dow)".into()));
+        return Err(CronError::Validation(
+            "cron expression must have exactly 5 fields (minute hour dom month dow)".into(),
+        ));
     }
     let minutes = parse_field(tokens[0], 0, 59)?;
     let hours = parse_field(tokens[1], 0, 23)?;
@@ -152,15 +175,31 @@ pub fn parse_cron_expr(expr: &str) -> Result<CronExpr, CronError> {
 fn month_to_u8(m: Month) -> u8 {
     use Month::*;
     match m {
-        January => 1, February => 2, March => 3, April => 4, May => 5, June => 6,
-        July => 7, August => 8, September => 9, October => 10, November => 11, December => 12,
+        January => 1,
+        February => 2,
+        March => 3,
+        April => 4,
+        May => 5,
+        June => 6,
+        July => 7,
+        August => 8,
+        September => 9,
+        October => 10,
+        November => 11,
+        December => 12,
     }
 }
 
 fn weekday_to_cron(w: Weekday) -> u8 {
     use Weekday::*;
     match w {
-        Monday => 1, Tuesday => 2, Wednesday => 3, Thursday => 4, Friday => 5, Saturday => 6, Sunday => 0,
+        Monday => 1,
+        Tuesday => 2,
+        Wednesday => 3,
+        Thursday => 4,
+        Friday => 5,
+        Saturday => 6,
+        Sunday => 0,
     }
 }
 
@@ -184,7 +223,9 @@ pub fn next_match(expr: &CronExpr, after_unix: u64) -> Option<u64> {
         let dom = dt.day() as u8;
         let dow = weekday_to_cron(dt.weekday());
         if !expr.doms.contains(&dom) || !expr.dows.contains(&dow) {
-            dt = dt.replace_date(dt.date().next_day()?).replace_time(Time::MIDNIGHT);
+            dt = dt
+                .replace_date(dt.date().next_day()?)
+                .replace_time(Time::MIDNIGHT);
             continue;
         }
         let hour = dt.hour() as u8;
@@ -194,7 +235,9 @@ pub fn next_match(expr: &CronExpr, after_unix: u64) -> Option<u64> {
                     dt = dt.replace_time(Time::from_hms(h, 0, 0).unwrap_or(Time::MIDNIGHT));
                 }
                 None => {
-                    dt = dt.replace_date(dt.date().next_day()?).replace_time(Time::MIDNIGHT);
+                    dt = dt
+                        .replace_date(dt.date().next_day()?)
+                        .replace_time(Time::MIDNIGHT);
                 }
             }
             continue;
@@ -224,9 +267,18 @@ fn next_matching_month(dt: OffsetDateTime, expr: &CronExpr) -> Option<OffsetDate
     for _ in 0..24 {
         if expr.months.contains(&m) {
             let month = match m {
-                1 => Month::January, 2 => Month::February, 3 => Month::March, 4 => Month::April,
-                5 => Month::May, 6 => Month::June, 7 => Month::July, 8 => Month::August,
-                9 => Month::September, 10 => Month::October, 11 => Month::November, 12 => Month::December,
+                1 => Month::January,
+                2 => Month::February,
+                3 => Month::March,
+                4 => Month::April,
+                5 => Month::May,
+                6 => Month::June,
+                7 => Month::July,
+                8 => Month::August,
+                9 => Month::September,
+                10 => Month::October,
+                11 => Month::November,
+                12 => Month::December,
                 _ => return None,
             };
             let date = Date::from_calendar_date(y, month, 1).ok()?;
@@ -270,7 +322,9 @@ impl Schedule {
                 }
             }
             Schedule::Interval { every_seconds } => Some(after_unix + every_seconds),
-            Schedule::Cron { expr } => parse_cron_expr(expr).ok().and_then(|e| next_match(&e, after_unix)),
+            Schedule::Cron { expr } => parse_cron_expr(expr)
+                .ok()
+                .and_then(|e| next_match(&e, after_unix)),
         }
     }
 }
@@ -319,7 +373,7 @@ fn parse_delay(input: &str) -> Result<u64, CronError> {
         _ => {
             return Err(CronError::Validation(
                 "unknown delay unit, expected s/m/h/d/w".into(),
-            ))
+            ));
         }
     };
     n.checked_mul(multiplier)
@@ -331,7 +385,8 @@ impl CronStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| CronError::Io(e.to_string()))?;
         }
-        let json = serde_json::to_string_pretty(jobs).map_err(|e| CronError::Parse(e.to_string()))?;
+        let json =
+            serde_json::to_string_pretty(jobs).map_err(|e| CronError::Parse(e.to_string()))?;
         let tmp = path.with_extension("tmp");
         std::fs::write(&tmp, &json).map_err(|e| CronError::Io(e.to_string()))?;
         std::fs::rename(&tmp, path).map_err(|e| CronError::Io(e.to_string()))
@@ -341,10 +396,14 @@ impl CronStore {
         let jobs_path = workspace::cron_jobs_file(workspace);
         let (jobs, next_id) = match std::fs::read_to_string(&jobs_path) {
             Ok(s) => {
-                let file: Vec<CronJob> = serde_json::from_str(&s).map_err(|e| CronError::Parse(e.to_string()))?;
+                let file: Vec<CronJob> =
+                    serde_json::from_str(&s).map_err(|e| CronError::Parse(e.to_string()))?;
                 let max_id = file
                     .iter()
-                    .filter_map(|j| j.id.strip_prefix("job-").and_then(|n| n.parse::<u64>().ok()))
+                    .filter_map(|j| {
+                        j.id.strip_prefix("job-")
+                            .and_then(|n| n.parse::<u64>().ok())
+                    })
                     .max()
                     .unwrap_or(0);
                 (file, max_id + 1)
@@ -377,7 +436,9 @@ impl CronStore {
     ) -> Result<CronJob, CronError> {
         if let Schedule::Interval { every_seconds } = &schedule {
             if *every_seconds < 60 {
-                return Err(CronError::Validation("interval must be at least 60 seconds".into()));
+                return Err(CronError::Validation(
+                    "interval must be at least 60 seconds".into(),
+                ));
             }
         }
         let now = unix_now();
@@ -393,7 +454,9 @@ impl CronStore {
             _ => schedule.next_fire_after(now),
         };
         if matches!(&schedule, Schedule::Cron { .. }) && next_run.is_none() {
-            return Err(CronError::Validation("cron expression has no upcoming matches".into()));
+            return Err(CronError::Validation(
+                "cron expression has no upcoming matches".into(),
+            ));
         }
         let id = format!("job-{}", self.next_id.fetch_add(1, Ordering::SeqCst));
         let job = CronJob {
@@ -457,7 +520,12 @@ impl CronStore {
     }
 
     pub fn get(&self, id: &str) -> Option<CronJob> {
-        self.jobs.read().expect("cron lock").iter().find(|j| j.id == id).cloned()
+        self.jobs
+            .read()
+            .expect("cron lock")
+            .iter()
+            .find(|j| j.id == id)
+            .cloned()
     }
 
     pub fn find_due(&self, now: u64) -> Vec<CronJob> {
@@ -573,7 +641,10 @@ impl Tool for CronTool {
             };
             match action {
                 "add" => {
-                    let message = args.get("message").and_then(Value::as_str).map(String::from);
+                    let message = args
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .map(String::from);
                     let message = match message {
                         Some(m) if !m.is_empty() => m,
                         _ => return ToolResult::error("add requires non-empty 'message'"),
@@ -596,12 +667,12 @@ impl Tool for CronTool {
                                 (None, None) => {
                                     return ToolResult::error(
                                         "once requires either 'at_unix' or 'delay' (e.g. '30m', '2h')",
-                                    )
+                                    );
                                 }
                                 (Some(_), Some(_)) => {
                                     return ToolResult::error(
                                         "once accepts either 'at_unix' or 'delay', not both",
-                                    )
+                                    );
                                 }
                             };
                             Schedule::Once { at_unix }
@@ -609,7 +680,11 @@ impl Tool for CronTool {
                         Some("interval") => {
                             let every = match args.get("every_seconds").and_then(Value::as_i64) {
                                 Some(x) => x,
-                                None => return ToolResult::error("interval requires 'every_seconds' (min 60)"),
+                                None => {
+                                    return ToolResult::error(
+                                        "interval requires 'every_seconds' (min 60)",
+                                    );
+                                }
                             };
                             if every < 60 {
                                 return ToolResult::error("every_seconds must be at least 60");
@@ -630,7 +705,11 @@ impl Tool for CronTool {
                                 expr: expr.to_string(),
                             }
                         }
-                        _ => return ToolResult::error("add requires 'schedule_type': once, interval, or cron"),
+                        _ => {
+                            return ToolResult::error(
+                                "add requires 'schedule_type': once, interval, or cron",
+                            );
+                        }
                     };
                     let job_action = match args.get("job_action").and_then(Value::as_str) {
                         Some("agent") => JobAction::Agent,
@@ -639,7 +718,9 @@ impl Tool for CronTool {
                     let label = args.get("label").and_then(Value::as_str).map(String::from);
                     let chat_id = match ctx.chat_id {
                         Some(id) => id,
-                        None => return ToolResult::error("cron add requires chat_id (current chat)"),
+                        None => {
+                            return ToolResult::error("cron add requires chat_id (current chat)");
+                        }
                     };
                     match store.add(label, message, job_action, schedule, chat_id) {
                         Ok(job) => ToolResult::ok(format!(
@@ -824,7 +905,9 @@ mod tests {
                 None,
                 "hello".into(),
                 JobAction::Direct,
-                Schedule::Once { at_unix: 9999999999 },
+                Schedule::Once {
+                    at_unix: 9999999999,
+                },
                 123,
             )
             .unwrap();
@@ -841,7 +924,15 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let store = CronStore::empty(&dir);
         store
-            .add(None, "x".into(), JobAction::Direct, Schedule::Once { at_unix: 9999999999 }, 1)
+            .add(
+                None,
+                "x".into(),
+                JobAction::Direct,
+                Schedule::Once {
+                    at_unix: 9999999999,
+                },
+                1,
+            )
             .unwrap();
         assert!(store.remove("job-1"));
         assert!(store.list().is_empty());
@@ -860,7 +951,9 @@ mod tests {
                 None,
                 "due".into(),
                 JobAction::Direct,
-                Schedule::Once { at_unix: base + 100 },
+                Schedule::Once {
+                    at_unix: base + 100,
+                },
                 1,
             )
             .unwrap();
@@ -869,7 +962,9 @@ mod tests {
                 None,
                 "later".into(),
                 JobAction::Direct,
-                Schedule::Once { at_unix: base + 10_000 },
+                Schedule::Once {
+                    at_unix: base + 10_000,
+                },
                 1,
             )
             .unwrap();
@@ -891,7 +986,9 @@ mod tests {
                 None,
                 "x".into(),
                 JobAction::Direct,
-                Schedule::Once { at_unix: base + 100 },
+                Schedule::Once {
+                    at_unix: base + 100,
+                },
                 1,
             )
             .unwrap();
@@ -915,7 +1012,9 @@ mod tests {
                 None,
                 "x".into(),
                 JobAction::Direct,
-                Schedule::Once { at_unix: now.saturating_sub(1) },
+                Schedule::Once {
+                    at_unix: now.saturating_sub(1),
+                },
                 1,
             )
             .unwrap_err();
