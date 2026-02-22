@@ -29,25 +29,29 @@ async fn pull_loop(workspace: PathBuf, db: Arc<BrainDb>, interval_secs: u64) {
         tokio::time::sleep(interval).await;
 
         let ws = workspace.clone();
-        match tokio::process::Command::new("git")
-            .args(["pull", "--rebase", "origin", "main"])
-            .current_dir(&ws)
-            .output()
-            .await
-        {
-            Ok(out) if out.status.success() => {
+        let output_res = tokio::task::spawn_blocking(move || {
+            std::process::Command::new("git")
+                .args(["pull", "--rebase", "origin", "main"])
+                .current_dir(&ws)
+                .output()
+        })
+        .await;
+
+        match output_res {
+            Ok(Ok(out)) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 eprintln!("git pull: ok — {}", stdout.trim());
 
+                let ws_reindex = workspace.clone();
                 // Re-index vault so FTS5 reflects any new notes from PC.
                 let idx = indexer.clone();
-                match tokio::task::spawn_blocking(move || idx.scan(&ws)).await {
+                match tokio::task::spawn_blocking(move || idx.scan(&ws_reindex)).await {
                     Ok(Ok(stats)) => eprintln!("vault re-index: {stats}"),
                     Ok(Err(e)) => eprintln!("vault re-index warning: {e}"),
                     Err(e) => eprintln!("vault re-index task error: {e}"),
                 }
             }
-            Ok(out) => {
+            Ok(Ok(out)) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 eprintln!(
                     "git pull: non-zero exit ({}): {}",
@@ -55,7 +59,8 @@ async fn pull_loop(workspace: PathBuf, db: Arc<BrainDb>, interval_secs: u64) {
                     stderr.trim()
                 );
             }
-            Err(e) => eprintln!("git pull: failed to spawn: {e}"),
+            Ok(Err(e)) => eprintln!("git pull: failed to spawn: {e}"),
+            Err(e) => eprintln!("git pull: task panicked: {e}"),
         }
     }
 }

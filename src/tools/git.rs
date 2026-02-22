@@ -12,7 +12,6 @@
 use std::process::Output;
 
 use serde_json::Value;
-use tokio::process::Command;
 
 use crate::tools::context::ToolCtx;
 use crate::tools::registry::{BoxFuture, Tool};
@@ -89,12 +88,18 @@ impl Tool for GitSyncTool {
 }
 
 async fn run_git(workspace: &std::path::Path, args: &[&str]) -> Result<Output, String> {
-    Command::new("git")
-        .args(args)
-        .current_dir(workspace)
-        .output()
-        .await
-        .map_err(|e| e.to_string())
+    let workspace = workspace.to_path_buf();
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new("git")
+            .args(&args)
+            .current_dir(&workspace)
+            .output()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 fn append_output(log: &mut String, label: &str, out: &Output) {
