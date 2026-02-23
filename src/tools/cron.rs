@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use time::{Date, Month, OffsetDateTime, Time, Weekday};
+use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Timelike, Utc};
 
 use crate::tools::context::ToolCtx;
 use crate::tools::registry::{BoxFuture, Tool};
@@ -172,72 +172,48 @@ pub fn parse_cron_expr(expr: &str) -> Result<CronExpr, CronError> {
     })
 }
 
-fn month_to_u8(m: Month) -> u8 {
-    use Month::*;
-    match m {
-        January => 1,
-        February => 2,
-        March => 3,
-        April => 4,
-        May => 5,
-        June => 6,
-        July => 7,
-        August => 8,
-        September => 9,
-        October => 10,
-        November => 11,
-        December => 12,
-    }
-}
-
-fn weekday_to_cron(w: Weekday) -> u8 {
-    use Weekday::*;
-    match w {
-        Monday => 1,
-        Tuesday => 2,
-        Wednesday => 3,
-        Thursday => 4,
-        Friday => 5,
-        Saturday => 6,
-        Sunday => 0,
-    }
-}
-
 const LIMIT_YEARS: i32 = 4;
 
 pub fn next_match(expr: &CronExpr, after_unix: u64) -> Option<u64> {
     let start_secs = (after_unix / 60 + 1) * 60;
     let start_secs = start_secs.min(i64::MAX as u64) as i64;
-    let mut dt = match OffsetDateTime::from_unix_timestamp(start_secs) {
-        Ok(d) => d,
-        Err(_) => return None,
+    let mut dt = match DateTime::from_timestamp(start_secs, 0) {
+        Some(d) => d,
+        None => return None,
     };
     let limit = dt.year() + LIMIT_YEARS;
 
     while dt.year() <= limit {
-        let month_u8 = month_to_u8(dt.month());
+        let month_u8 = dt.month() as u8;
         if !expr.months.contains(&month_u8) {
             dt = next_matching_month(dt, expr)?;
             continue;
         }
         let dom = dt.day() as u8;
-        let dow = weekday_to_cron(dt.weekday());
+        let dow = dt.weekday().num_days_from_sunday() as u8;
         if !expr.doms.contains(&dom) || !expr.dows.contains(&dow) {
             dt = dt
-                .replace_date(dt.date().next_day()?)
-                .replace_time(Time::MIDNIGHT);
+                .date_naive()
+                .succ_opt()?
+                .and_hms_opt(0, 0, 0)?
+                .and_utc();
             continue;
         }
         let hour = dt.hour() as u8;
         if !expr.hours.contains(&hour) {
             match expr.hours.iter().find(|&&h| h >= hour) {
                 Some(&h) => {
-                    dt = dt.replace_time(Time::from_hms(h, 0, 0).unwrap_or(Time::MIDNIGHT));
+                    dt = dt
+                        .date_naive()
+                        .and_hms_opt(h as u32, 0, 0)?
+                        .and_utc();
                 }
                 None => {
                     dt = dt
-                        .replace_date(dt.date().next_day()?)
-                        .replace_time(Time::MIDNIGHT);
+                        .date_naive()
+                        .succ_opt()?
+                        .and_hms_opt(0, 0, 0)?
+                        .and_utc();
                 }
             }
             continue;
@@ -246,43 +222,32 @@ pub fn next_match(expr: &CronExpr, after_unix: u64) -> Option<u64> {
         if !expr.minutes.contains(&minute) {
             match expr.minutes.iter().find(|&&m| m >= minute) {
                 Some(&m) => {
-                    dt = dt.replace_time(Time::from_hms(hour, m, 0).unwrap_or(Time::MIDNIGHT));
+                    dt = dt
+                        .date_naive()
+                        .and_hms_opt(hour as u32, m as u32, 0)?
+                        .and_utc();
                 }
                 None => {
                     let (next_date, next_hour) = next_hour_in_expr(dt, expr);
-                    let t = Time::from_hms(next_hour, expr.minutes[0], 0).unwrap_or(Time::MIDNIGHT);
-                    dt = next_date.with_time(t).assume_utc();
+                    dt = next_date
+                        .and_hms_opt(next_hour as u32, expr.minutes[0] as u32, 0)?
+                        .and_utc();
                 }
             }
             continue;
         }
-        return Some(dt.unix_timestamp() as u64);
+        return Some(dt.timestamp() as u64);
     }
     None
 }
 
-fn next_matching_month(dt: OffsetDateTime, expr: &CronExpr) -> Option<OffsetDateTime> {
+fn next_matching_month(dt: DateTime<Utc>, expr: &CronExpr) -> Option<DateTime<Utc>> {
     let mut y = dt.year();
-    let mut m = month_to_u8(dt.month());
+    let mut m = dt.month() as u8;
     for _ in 0..24 {
         if expr.months.contains(&m) {
-            let month = match m {
-                1 => Month::January,
-                2 => Month::February,
-                3 => Month::March,
-                4 => Month::April,
-                5 => Month::May,
-                6 => Month::June,
-                7 => Month::July,
-                8 => Month::August,
-                9 => Month::September,
-                10 => Month::October,
-                11 => Month::November,
-                12 => Month::December,
-                _ => return None,
-            };
-            let date = Date::from_calendar_date(y, month, 1).ok()?;
-            return Some(date.midnight().assume_utc());
+            let date = NaiveDate::from_ymd_opt(y, m as u32, 1)?;
+            return Some(date.and_hms_opt(0, 0, 0)?.and_utc());
         }
         m += 1;
         if m > 12 {
@@ -293,14 +258,14 @@ fn next_matching_month(dt: OffsetDateTime, expr: &CronExpr) -> Option<OffsetDate
     None
 }
 
-fn next_hour_in_expr(dt: OffsetDateTime, expr: &CronExpr) -> (Date, u8) {
-    let mut date = dt.date();
+fn next_hour_in_expr(dt: DateTime<Utc>, expr: &CronExpr) -> (NaiveDate, u8) {
+    let mut date = dt.date_naive();
     let mut hour = dt.hour() as u8;
     loop {
         if let Some(&h) = expr.hours.iter().find(|&&h| h > hour) {
             return (date, h);
         }
-        date = match date.next_day() {
+        date = match date.succ_opt() {
             Some(d) => d,
             None => return (date, 23),
         };

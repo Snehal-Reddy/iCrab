@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use time::{Date, Month, OffsetDateTime};
+use chrono::{Datelike, NaiveDate, Utc};
 
 const MEMORY_SUMMARY_LEN: usize = 4000;
 const DAILY_NOTE_SUMMARY_LEN: usize = 2000;
@@ -13,8 +13,8 @@ pub const RECENT_DAILY_DAYS: u32 = 3;
 /// Current date in UTC as "YYYYMMDD" for daily note paths and memory context.
 #[inline]
 pub fn today_yyyymmdd() -> String {
-    let d = OffsetDateTime::now_utc().date();
-    format!("{:04}{:02}{:02}", d.year(), month_n(d.month()), d.day())
+    let d = Utc::now().date_naive();
+    format!("{:04}{:02}{:02}", d.year(), d.month(), d.day())
 }
 
 /// Path to the skills directory under the workspace: `workspace/skills`.
@@ -108,48 +108,15 @@ pub fn brain_db_path(workspace: &Path) -> PathBuf {
     icrab_dir(workspace).join("brain.db")
 }
 
-fn month_n(m: Month) -> u8 {
-    use Month::*;
-    match m {
-        January => 1,
-        February => 2,
-        March => 3,
-        April => 4,
-        May => 5,
-        June => 6,
-        July => 7,
-        August => 8,
-        September => 9,
-        October => 10,
-        November => 11,
-        December => 12,
-    }
-}
-
 /// Parse "YYYYMMDD" into Date. Returns None if invalid.
-fn parse_yyyymmdd(s: &str) -> Option<Date> {
+fn parse_yyyymmdd(s: &str) -> Option<NaiveDate> {
     if s.len() != 8 {
         return None;
     }
     let y: i32 = s[0..4].parse().ok()?;
-    let m: u8 = s[4..6].parse().ok()?;
-    let d: u8 = s[6..8].parse().ok()?;
-    let month = match m {
-        1 => Month::January,
-        2 => Month::February,
-        3 => Month::March,
-        4 => Month::April,
-        5 => Month::May,
-        6 => Month::June,
-        7 => Month::July,
-        8 => Month::August,
-        9 => Month::September,
-        10 => Month::October,
-        11 => Month::November,
-        12 => Month::December,
-        _ => return None,
-    };
-    Date::from_calendar_date(y, month, d).ok()
+    let m: u32 = s[4..6].parse().ok()?;
+    let d: u32 = s[6..8].parse().ok()?;
+    NaiveDate::from_ymd_opt(y, m, d)
 }
 
 /// Dates from today going back (today_yyyymmdd, yesterday, …). At most `days` entries.
@@ -160,10 +127,10 @@ fn recent_daily_dates(today_yyyymmdd: &str, days: u32) -> Option<Vec<String>> {
         out.push(format!(
             "{:04}{:02}{:02}",
             date.year(),
-            month_n(date.month()),
+            date.month(),
             date.day()
         ));
-        date = date.previous_day()?;
+        date = date.pred_opt()?;
     }
     Some(out)
 }

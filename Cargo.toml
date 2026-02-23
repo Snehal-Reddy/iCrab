@@ -13,7 +13,7 @@ targets = ["i686-unknown-linux-musl"]
 
 [dependencies]
 # Async runtime (poller, agent loop, cron, heartbeat)
-tokio = { version = "1.41", features = ["full"] }
+tokio = { version = "1.41", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "process", "net"] }
 # SQLite persistence (bundled C library; works on i686-musl without host toolchain issues)
 rusqlite = { version = "0.38", features = ["bundled"] }
 # Config and API types (config.toml)
@@ -24,7 +24,7 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 regex = "1.11"
 serde_json = "1.0"
 # Date for today + recent daily notes (YYYYMMDD)
-time = { version = "0.3", default-features = false, features = ["formatting", "std"] }
+
 # IANA timezone support for local-time system prompt line (DST-aware)
 chrono    = { version = "0.4", default-features = false, features = ["std", "clock"] }
 chrono-tz = { version = "0.10", default-features = false }
@@ -36,10 +36,11 @@ tokio = { version = "1.41", features = ["test-util"] }
 serde_json = "1.0"
 
 [profile.release]
+opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
 
 [profile.release.package."*"]
-opt-level = 3
+opt-level = "z"
