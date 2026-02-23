@@ -1,6 +1,6 @@
 //! web_search (Brave/DDG), web_fetch (GET URL, truncated body).
 
-use regex::Regex;
+use regex_lite::Regex;
 use reqwest::Client;
 use serde_json::Value;
 

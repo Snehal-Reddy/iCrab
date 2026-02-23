@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use regex::Regex;
+use regex_lite::Regex;
 use serde_json::Value;
 
 use crate::tools::context::ToolCtx;
