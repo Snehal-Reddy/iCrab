@@ -211,6 +211,29 @@ impl BrainDb {
     // Chat history operations
     // -----------------------------------------------------------------------
 
+    /// Force-rotate to a brand-new session for `chat_id`.
+    ///
+    /// Generates a fresh UUID, stores it as `current_session_id` in
+    /// `chat_summary`, and resets `summary` to `""`.  Old messages remain
+    /// intact in `chat_history` under their previous `session_id`.
+    pub fn reset_session_id(&self, chat_id: &str) -> Result<String, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError(format!("lock: {e}")))?;
+
+        let new_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO chat_summary (chat_id, current_session_id, summary)
+             VALUES (?1, ?2, '')
+             ON CONFLICT(chat_id) DO UPDATE
+                 SET current_session_id = excluded.current_session_id,
+                     summary            = ''",
+            params![chat_id, &new_id],
+        )?;
+        Ok(new_id)
+    }
+
     /// Return the active `session_id` UUID for `chat_id`, creating and
     /// persisting a new one if none exists yet.
     pub fn get_or_create_session_id(&self, chat_id: &str) -> Result<String, DbError> {
@@ -606,6 +629,78 @@ mod tests {
         // Reopen — schema init must be safe with IF NOT EXISTS
         let db2 = BrainDb::open(tmp.path()).unwrap();
         assert!(db2.health_check());
+    }
+
+    // ── reset_session_id ─────────────────────────────────────────────────────
+
+    #[test]
+    fn reset_session_id_returns_new_uuid() {
+        let (_tmp, db) = temp_db();
+        let sid1 = db.get_or_create_session_id("chat").unwrap();
+        let sid2 = db.reset_session_id("chat").unwrap();
+        assert_ne!(sid1, sid2, "reset must produce a different session_id");
+        assert_eq!(sid2.len(), 36);
+    }
+
+    #[test]
+    fn reset_session_id_clears_summary() {
+        let (_tmp, db) = temp_db();
+        let sid = db.get_or_create_session_id("chat").unwrap();
+        db.append_session("chat", &sid, &[], "old summary").unwrap();
+
+        db.reset_session_id("chat").unwrap();
+        let new_sid = db.get_or_create_session_id("chat").unwrap();
+        // The session_id must have changed and the summary must be empty
+        assert_ne!(sid, new_sid);
+        let (_, summary) = db.load_session("chat", &new_sid).unwrap();
+        assert_eq!(summary, "");
+    }
+
+    #[test]
+    fn reset_session_id_keeps_old_messages() {
+        let (_tmp, db) = temp_db();
+        let old_sid = db.get_or_create_session_id("chat").unwrap();
+        db.append_session(
+            "chat",
+            &old_sid,
+            &[StoredMessage {
+                role: "user".into(),
+                content: "preserved".into(),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+            "",
+        )
+        .unwrap();
+
+        db.reset_session_id("chat").unwrap();
+
+        // Old messages still retrievable by their original session_id
+        let (old_msgs, _) = db.load_session("chat", &old_sid).unwrap();
+        assert_eq!(old_msgs.len(), 1);
+        assert_eq!(old_msgs[0].content, "preserved");
+    }
+
+    #[test]
+    fn reset_session_id_new_session_starts_empty() {
+        let (_tmp, db) = temp_db();
+        let old_sid = db.get_or_create_session_id("chat").unwrap();
+        db.append_session(
+            "chat",
+            &old_sid,
+            &[StoredMessage {
+                role: "user".into(),
+                content: "old".into(),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+            "",
+        )
+        .unwrap();
+
+        let new_sid = db.reset_session_id("chat").unwrap();
+        let (new_msgs, _) = db.load_session("chat", &new_sid).unwrap();
+        assert!(new_msgs.is_empty(), "new session must start with no messages");
     }
 
     // ── get_or_create_session_id ─────────────────────────────────────────────

@@ -26,7 +26,7 @@ I tried a few options of OpenClaw alternatives. They were bloated with complex d
 
 - **Telegram Interface:** Chat natively. It reads, thinks, uses tools, and replies.
 - **Workspace Integration:** Reads and writes files directly in your Obsidian vault. It knows what you wrote yesterday because it can read your daily notes.
-- **Local Memory & Search:** SQLite-backed persistence with FTS5. The agent can search your entire vault or your chat history blazingly fast.
+- **Local Memory & Search:** SQLite-backed persistence with FTS5. The agent can search your entire vault or your chat history blazingly fast. Send `/clear` to archive the current conversation and start fresh — old messages stay in the database and remain searchable.
 - **Background Subagents:** Tell it to "Search the web for X and summarize it." It spawns a background agent, freeing up the main chat, and messages you when it's done.
 - **Cron & Heartbeat:** Schedule recurring tasks or reminders (e.g., "Summarize unread messages every hour").
 - **Basic Tools:**

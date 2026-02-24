@@ -119,6 +119,20 @@ impl Session {
         Ok(())
     }
 
+    /// Rotate to a fresh session for `chat_id`, archiving the old one in place.
+    ///
+    /// Old messages remain in `chat_history` under their previous `session_id`
+    /// and are still searchable via FTS.  The next `Session::load` for this
+    /// `chat_id` will start with an empty history and a new `session_id`.
+    pub async fn reset(db: Arc<BrainDb>, chat_id: &str) -> Result<(), SessionError> {
+        let chat_id = chat_id.to_string();
+        tokio::task::spawn_blocking(move || db.reset_session_id(&chat_id))
+            .await
+            .map_err(|e| SessionError::Db(format!("spawn_blocking: {e}")))?
+            .map_err(SessionError::from)?;
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Mutation helpers
     // -----------------------------------------------------------------------
@@ -331,6 +345,55 @@ mod tests {
         }
         assert_eq!(session.history().len(), MAX_HISTORY);
         assert_eq!(session.history().first().unwrap().content, "msg 5");
+    }
+
+    // ── Session::reset archives old session and starts fresh ──────────────────
+
+    #[tokio::test]
+    async fn session_reset_starts_fresh_history() {
+        let (_tmp, db) = temp_db();
+
+        // Build up some history and save it
+        let mut s = Session::load(Arc::clone(&db), "chat").await.unwrap();
+        s.add_user_message("before clear");
+        s.save().await.unwrap();
+        let old_sid = s.session_id().to_string();
+
+        // Reset — rotates to a new session_id
+        Session::reset(Arc::clone(&db), "chat").await.unwrap();
+
+        // Loading now gives an empty history with a different session_id
+        let fresh = Session::load(Arc::clone(&db), "chat").await.unwrap();
+        assert!(fresh.history().is_empty(), "history must be empty after reset");
+        assert!(fresh.summary().is_empty(), "summary must be cleared after reset");
+        assert_ne!(
+            fresh.session_id(),
+            old_sid,
+            "session_id must rotate after reset"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_reset_preserves_old_messages_in_db() {
+        let (_tmp, db) = temp_db();
+
+        let mut s = Session::load(Arc::clone(&db), "chat").await.unwrap();
+        let old_sid = s.session_id().to_string();
+        s.add_user_message("archived message");
+        s.save().await.unwrap();
+
+        Session::reset(Arc::clone(&db), "chat").await.unwrap();
+
+        // Old messages are still in chat_history under the previous session_id
+        let inner_db = Arc::clone(&db);
+        let (old_msgs, _) = tokio::task::spawn_blocking(move || {
+            inner_db.load_session("chat", &old_sid)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(old_msgs.len(), 1);
+        assert_eq!(old_msgs[0].content, "archived message");
     }
 
     // ── All pending inserts reach the DB even when history is capped ──────────

@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use tokio::sync::mpsc;
 
 use icrab::agent;
+use icrab::agent::session::Session;
 use icrab::agent::subagent_manager::SubagentManager;
 use icrab::config;
 use icrab::cron_runner;
@@ -182,7 +183,15 @@ async fn main() {
         };
         let chat_id_str = msg.chat_id.to_string();
 
-        let reply = if msg.channel == "heartbeat" {
+        let reply = if msg.text.trim() == "/clear" {
+            match Session::reset(Arc::clone(&db), &chat_id_str).await {
+                Ok(()) => "Session cleared. Starting fresh! 🦀".to_string(),
+                Err(e) => {
+                    eprintln!("clear session error: {}", e);
+                    format!("Error clearing session: {}.", e)
+                }
+            }
+        } else if msg.channel == "heartbeat" {
             match agent::process_heartbeat_message(
                 &llm,
                 &registry,
