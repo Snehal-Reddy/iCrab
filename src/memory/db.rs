@@ -95,19 +95,22 @@ impl BrainDb {
             CREATE TABLE IF NOT EXISTS chat_history (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 chat_id      TEXT    NOT NULL,
+                session_id   TEXT    NOT NULL DEFAULT '',
                 role         TEXT    NOT NULL,
                 content      TEXT    NOT NULL,
                 tool_call_id TEXT,
                 tool_calls   TEXT,
                 timestamp    DATETIME DEFAULT CURRENT_TIMESTAMP
             );
+            -- Legacy index kept for compatibility; new queries use idx_chat_history_chat_session
             CREATE INDEX IF NOT EXISTS idx_chat_history_chat_id
                 ON chat_history(chat_id, id);
 
             -- ── Chat summaries ──────────────────────────────────────────────────────
             CREATE TABLE IF NOT EXISTS chat_summary (
-                chat_id TEXT PRIMARY KEY,
-                summary TEXT NOT NULL DEFAULT ''
+                chat_id            TEXT PRIMARY KEY,
+                current_session_id TEXT NOT NULL DEFAULT '',
+                summary            TEXT NOT NULL DEFAULT ''
             );
 
             -- ── Chat FTS5 ──────────────────────────────────────────────────────────
@@ -169,6 +172,38 @@ impl BrainDb {
                     VALUES (new.rowid, new.filepath, new.content);
                 END;",
         )?;
+
+        // ── Schema migrations (backward-compatible) ──────────────────────────
+        // Add session_id to chat_history for databases created before this column existed.
+        let has_session_id: bool = {
+            let mut stmt = conn.prepare("PRAGMA table_info(chat_history)")?;
+            stmt.query_map([], |row| row.get::<_, String>(1))?
+                .any(|r| r.map(|n| n == "session_id").unwrap_or(false))
+        };
+        if !has_session_id {
+            conn.execute_batch(
+                "ALTER TABLE chat_history ADD COLUMN session_id TEXT NOT NULL DEFAULT '';",
+            )?;
+        }
+
+        // Add current_session_id to chat_summary for older databases.
+        let has_current_session_id: bool = {
+            let mut stmt = conn.prepare("PRAGMA table_info(chat_summary)")?;
+            stmt.query_map([], |row| row.get::<_, String>(1))?
+                .any(|r| r.map(|n| n == "current_session_id").unwrap_or(false))
+        };
+        if !has_current_session_id {
+            conn.execute_batch(
+                "ALTER TABLE chat_summary ADD COLUMN current_session_id TEXT NOT NULL DEFAULT '';",
+            )?;
+        }
+
+        // Compound index used by session-scoped queries; safe to create once columns exist.
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_chat_history_chat_session
+                 ON chat_history(chat_id, session_id, id);",
+        )?;
+
         Ok(())
     }
 
@@ -176,13 +211,47 @@ impl BrainDb {
     // Chat history operations
     // -----------------------------------------------------------------------
 
-    /// Persist the entire session (messages + summary) atomically.
+    /// Return the active `session_id` UUID for `chat_id`, creating and
+    /// persisting a new one if none exists yet.
+    pub fn get_or_create_session_id(&self, chat_id: &str) -> Result<String, DbError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError(format!("lock: {e}")))?;
+
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT current_session_id FROM chat_summary WHERE chat_id = ?1",
+                params![chat_id],
+                |row| row.get::<_, String>(0),
+            )
+            .ok();
+
+        if let Some(id) = existing {
+            if !id.is_empty() {
+                return Ok(id);
+            }
+        }
+
+        let new_id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO chat_summary (chat_id, current_session_id, summary)
+             VALUES (?1, ?2, '')
+             ON CONFLICT(chat_id) DO UPDATE SET current_session_id = excluded.current_session_id",
+            params![chat_id, &new_id],
+        )?;
+        Ok(new_id)
+    }
+
+    /// Append new `messages` for the given `session_id` and upsert the summary.
     ///
-    /// Clears existing rows for `chat_id`, then inserts all `messages`, then
-    /// upserts the `summary`. Wrapped in a transaction for atomicity.
-    pub fn save_session(
+    /// Unlike the old `save_session`, this never deletes existing rows —
+    /// every call only INSERTs the provided messages. Older messages in the
+    /// same session remain intact and searchable via `chat_fts`.
+    pub fn append_session(
         &self,
         chat_id: &str,
+        session_id: &str,
         messages: &[StoredMessage],
         summary: &str,
     ) -> Result<(), DbError> {
@@ -193,17 +262,14 @@ impl BrainDb {
 
         conn.execute_batch("BEGIN;")?;
 
-        conn.execute(
-            "DELETE FROM chat_history WHERE chat_id = ?1",
-            params![chat_id],
-        )?;
-
         for msg in messages {
             conn.execute(
-                "INSERT INTO chat_history (chat_id, role, content, tool_call_id, tool_calls)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO chat_history
+                     (chat_id, session_id, role, content, tool_call_id, tool_calls)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     chat_id,
+                    session_id,
                     msg.role,
                     msg.content,
                     msg.tool_call_id,
@@ -213,17 +279,23 @@ impl BrainDb {
         }
 
         conn.execute(
-            "INSERT OR REPLACE INTO chat_summary (chat_id, summary) VALUES (?1, ?2)",
-            params![chat_id, summary],
+            "INSERT INTO chat_summary (chat_id, current_session_id, summary)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(chat_id) DO UPDATE SET summary = excluded.summary",
+            params![chat_id, session_id, summary],
         )?;
 
         conn.execute_batch("COMMIT;")?;
         Ok(())
     }
 
-    /// Load all messages and the summary for `chat_id`.
-    /// Returns `(messages, summary)`. Missing session → empty vec and empty string.
-    pub fn load_session(&self, chat_id: &str) -> Result<(Vec<StoredMessage>, String), DbError> {
+    /// Load messages for the active `session_id` and the chat summary.
+    /// Returns `(messages, summary)`. Unknown `chat_id` or `session_id` → empty vec and empty string.
+    pub fn load_session(
+        &self,
+        chat_id: &str,
+        session_id: &str,
+    ) -> Result<(Vec<StoredMessage>, String), DbError> {
         let conn = self
             .conn
             .lock()
@@ -232,12 +304,12 @@ impl BrainDb {
         let mut stmt = conn.prepare(
             "SELECT role, content, tool_call_id, tool_calls
              FROM chat_history
-             WHERE chat_id = ?1
+             WHERE chat_id = ?1 AND session_id = ?2
              ORDER BY id ASC",
         )?;
 
         let messages: Vec<StoredMessage> = stmt
-            .query_map(params![chat_id], |row| {
+            .query_map(params![chat_id, session_id], |row| {
                 Ok(StoredMessage {
                     role: row.get(0)?,
                     content: row.get(1)?,
@@ -536,21 +608,49 @@ mod tests {
         assert!(db2.health_check());
     }
 
+    // ── get_or_create_session_id ─────────────────────────────────────────────
+
+    #[test]
+    fn get_or_create_session_id_creates_new() {
+        let (_tmp, db) = temp_db();
+        let sid = db.get_or_create_session_id("chat1").unwrap();
+        assert!(!sid.is_empty());
+        // UUID v4 format: 8-4-4-4-12 hex chars
+        assert_eq!(sid.len(), 36);
+    }
+
+    #[test]
+    fn get_or_create_session_id_returns_same_on_second_call() {
+        let (_tmp, db) = temp_db();
+        let sid1 = db.get_or_create_session_id("chat1").unwrap();
+        let sid2 = db.get_or_create_session_id("chat1").unwrap();
+        assert_eq!(sid1, sid2);
+    }
+
+    #[test]
+    fn get_or_create_session_id_isolated_by_chat_id() {
+        let (_tmp, db) = temp_db();
+        let sid_a = db.get_or_create_session_id("A").unwrap();
+        let sid_b = db.get_or_create_session_id("B").unwrap();
+        assert_ne!(sid_a, sid_b);
+    }
+
     // ── chat_history: empty session ──────────────────────────────────────────
 
     #[test]
     fn load_session_missing_returns_empty() {
         let (_tmp, db) = temp_db();
-        let (msgs, summary) = db.load_session("nonexistent").unwrap();
+        let (msgs, summary) = db.load_session("nonexistent", "fake-session-id").unwrap();
         assert!(msgs.is_empty());
         assert!(summary.is_empty());
     }
 
-    // ── chat_history: save & load roundtrip ─────────────────────────────────
+    // ── chat_history: append & load roundtrip ───────────────────────────────
 
     #[test]
-    fn save_load_roundtrip() {
+    fn append_load_roundtrip() {
         let (_tmp, db) = temp_db();
+        let sid = "session-abc";
         let messages = vec![
             StoredMessage {
                 role: "user".into(),
@@ -565,10 +665,10 @@ mod tests {
                 tool_calls: None,
             },
         ];
-        db.save_session("chat1", &messages, "brief summary")
+        db.append_session("chat1", sid, &messages, "brief summary")
             .unwrap();
 
-        let (loaded, summary) = db.load_session("chat1").unwrap();
+        let (loaded, summary) = db.load_session("chat1", sid).unwrap();
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].role, "user");
         assert_eq!(loaded[0].content, "Hello");
@@ -577,44 +677,94 @@ mod tests {
         assert_eq!(summary, "brief summary");
     }
 
-    // ── chat_history: overwrite on second save ───────────────────────────────
+    // ── chat_history: append is additive (no delete) ─────────────────────────
 
     #[test]
-    fn save_overwrites_previous() {
+    fn append_adds_to_session() {
         let (_tmp, db) = temp_db();
-        let msgs1 = vec![StoredMessage {
-            role: "user".into(),
-            content: "First".into(),
-            tool_call_id: None,
-            tool_calls: None,
-        }];
-        db.save_session("c", &msgs1, "sum1").unwrap();
+        let sid = "session-xyz";
 
-        let msgs2 = vec![
-            StoredMessage {
+        db.append_session(
+            "c",
+            sid,
+            &[StoredMessage {
                 role: "user".into(),
                 content: "First".into(),
                 tool_call_id: None,
                 tool_calls: None,
-            },
-            StoredMessage {
-                role: "assistant".into(),
-                content: "OK".into(),
-                tool_call_id: None,
-                tool_calls: None,
-            },
-            StoredMessage {
-                role: "user".into(),
-                content: "Second".into(),
-                tool_call_id: None,
-                tool_calls: None,
-            },
-        ];
-        db.save_session("c", &msgs2, "sum2").unwrap();
+            }],
+            "sum1",
+        )
+        .unwrap();
 
-        let (loaded, summary) = db.load_session("c").unwrap();
-        assert_eq!(loaded.len(), 3);
+        db.append_session(
+            "c",
+            sid,
+            &[
+                StoredMessage {
+                    role: "assistant".into(),
+                    content: "OK".into(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                },
+                StoredMessage {
+                    role: "user".into(),
+                    content: "Second".into(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                },
+            ],
+            "sum2",
+        )
+        .unwrap();
+
+        let (loaded, summary) = db.load_session("c", sid).unwrap();
+        assert_eq!(loaded.len(), 3, "all three messages must be present");
+        assert_eq!(loaded[0].content, "First");
+        assert_eq!(loaded[1].content, "OK");
+        assert_eq!(loaded[2].content, "Second");
         assert_eq!(summary, "sum2");
+    }
+
+    // ── chat_history: different session_ids are isolated ─────────────────────
+
+    #[test]
+    fn sessions_isolated_by_session_id() {
+        let (_tmp, db) = temp_db();
+        let sid1 = "session-1";
+        let sid2 = "session-2";
+
+        db.append_session(
+            "chat",
+            sid1,
+            &[StoredMessage {
+                role: "user".into(),
+                content: "from session 1".into(),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+            "",
+        )
+        .unwrap();
+        db.append_session(
+            "chat",
+            sid2,
+            &[StoredMessage {
+                role: "user".into(),
+                content: "from session 2".into(),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+            "",
+        )
+        .unwrap();
+
+        let (msgs1, _) = db.load_session("chat", sid1).unwrap();
+        let (msgs2, _) = db.load_session("chat", sid2).unwrap();
+        assert_eq!(msgs1.len(), 1);
+        assert_eq!(msgs2.len(), 1);
+        assert_eq!(msgs1[0].content, "from session 1");
+        assert_eq!(msgs2[0].content, "from session 2");
     }
 
     // ── chat_history: sessions are isolated by chat_id ──────────────────────
@@ -622,23 +772,34 @@ mod tests {
     #[test]
     fn sessions_isolated_by_chat_id() {
         let (_tmp, db) = temp_db();
-        let a = vec![StoredMessage {
-            role: "user".into(),
-            content: "from A".into(),
-            tool_call_id: None,
-            tool_calls: None,
-        }];
-        let b = vec![StoredMessage {
-            role: "user".into(),
-            content: "from B".into(),
-            tool_call_id: None,
-            tool_calls: None,
-        }];
-        db.save_session("A", &a, "").unwrap();
-        db.save_session("B", &b, "").unwrap();
+        let sid = "same-session-id";
+        db.append_session(
+            "A",
+            sid,
+            &[StoredMessage {
+                role: "user".into(),
+                content: "from A".into(),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+            "",
+        )
+        .unwrap();
+        db.append_session(
+            "B",
+            sid,
+            &[StoredMessage {
+                role: "user".into(),
+                content: "from B".into(),
+                tool_call_id: None,
+                tool_calls: None,
+            }],
+            "",
+        )
+        .unwrap();
 
-        let (la, _) = db.load_session("A").unwrap();
-        let (lb, _) = db.load_session("B").unwrap();
+        let (la, _) = db.load_session("A", sid).unwrap();
+        let (lb, _) = db.load_session("B", sid).unwrap();
         assert_eq!(la[0].content, "from A");
         assert_eq!(lb[0].content, "from B");
     }
@@ -648,6 +809,7 @@ mod tests {
     #[test]
     fn tool_message_fields_roundtrip() {
         let (_tmp, db) = temp_db();
+        let sid = "session-tool";
         let messages = vec![
             StoredMessage {
                 role: "assistant".into(),
@@ -662,9 +824,9 @@ mod tests {
                 tool_calls: None,
             },
         ];
-        db.save_session("tool_chat", &messages, "").unwrap();
+        db.append_session("tool_chat", sid, &messages, "").unwrap();
 
-        let (loaded, _) = db.load_session("tool_chat").unwrap();
+        let (loaded, _) = db.load_session("tool_chat", sid).unwrap();
         assert_eq!(loaded.len(), 2);
         assert!(loaded[0].tool_calls.is_some());
         assert_eq!(loaded[1].tool_call_id.as_deref(), Some("c1"));
@@ -675,17 +837,19 @@ mod tests {
     #[test]
     fn empty_summary_upserts() {
         let (_tmp, db) = temp_db();
-        db.save_session("s", &[], "").unwrap();
-        let (_, summary) = db.load_session("s").unwrap();
+        let sid = "session-s";
+        db.append_session("s", sid, &[], "").unwrap();
+        let (_, summary) = db.load_session("s", sid).unwrap();
         assert_eq!(summary, "");
     }
 
     #[test]
-    fn summary_updated_on_second_save() {
+    fn summary_updated_on_second_append() {
         let (_tmp, db) = temp_db();
-        db.save_session("s", &[], "old summary").unwrap();
-        db.save_session("s", &[], "new summary").unwrap();
-        let (_, summary) = db.load_session("s").unwrap();
+        let sid = "session-s";
+        db.append_session("s", sid, &[], "old summary").unwrap();
+        db.append_session("s", sid, &[], "new summary").unwrap();
+        let (_, summary) = db.load_session("s", sid).unwrap();
         assert_eq!(summary, "new summary");
     }
 
@@ -885,10 +1049,12 @@ mod tests {
     #[test]
     fn data_persists_across_reopen() {
         let tmp = TempDir::new().unwrap();
+        let sid = "session-persist";
         {
             let db = BrainDb::open(tmp.path()).unwrap();
-            db.save_session(
+            db.append_session(
                 "persist",
+                sid,
                 &[StoredMessage {
                     role: "user".into(),
                     content: "survive restarts".into(),
@@ -900,7 +1066,7 @@ mod tests {
             .unwrap();
         }
         let db2 = BrainDb::open(tmp.path()).unwrap();
-        let (msgs, summary) = db2.load_session("persist").unwrap();
+        let (msgs, summary) = db2.load_session("persist", sid).unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].content, "survive restarts");
         assert_eq!(summary, "persisted summary");
@@ -911,8 +1077,10 @@ mod tests {
     #[test]
     fn unicode_content_roundtrip() {
         let (_tmp, db) = temp_db();
-        db.save_session(
+        let sid = "session-uni";
+        db.append_session(
             "unicode",
+            sid,
             &[StoredMessage {
                 role: "user".into(),
                 content: "こんにちは 🚀 Ñoño".into(),
@@ -922,7 +1090,7 @@ mod tests {
             "日本語サマリー",
         )
         .unwrap();
-        let (msgs, summary) = db.load_session("unicode").unwrap();
+        let (msgs, summary) = db.load_session("unicode", sid).unwrap();
         assert_eq!(msgs[0].content, "こんにちは 🚀 Ñoño");
         assert_eq!(summary, "日本語サマリー");
     }
@@ -932,8 +1100,9 @@ mod tests {
     #[test]
     fn chat_fts_search_finds_saved_message() {
         let (_tmp, db) = temp_db();
-        db.save_session(
+        db.append_session(
             "chat1",
+            "session-s",
             &[StoredMessage {
                 role: "user".into(),
                 content: "I want to do squats tomorrow".into(),
@@ -961,8 +1130,9 @@ mod tests {
     #[test]
     fn chat_fts_search_no_match_returns_empty() {
         let (_tmp, db) = temp_db();
-        db.save_session(
+        db.append_session(
             "c",
+            "session-s",
             &[StoredMessage {
                 role: "user".into(),
                 content: "hello world".into(),
@@ -987,7 +1157,8 @@ mod tests {
                 tool_calls: None,
             })
             .collect();
-        db.save_session("bulk", &messages, "").unwrap();
+        db.append_session("bulk", "session-s", &messages, "")
+            .unwrap();
         let rows = db.chat_fts_search("squats", 3).unwrap();
         assert!(rows.len() <= 3);
     }
@@ -995,6 +1166,7 @@ mod tests {
     #[test]
     fn message_ordering_preserved() {
         let (_tmp, db) = temp_db();
+        let sid = "session-order";
         let messages: Vec<StoredMessage> = (0..10)
             .map(|i| StoredMessage {
                 role: "user".into(),
@@ -1003,8 +1175,8 @@ mod tests {
                 tool_calls: None,
             })
             .collect();
-        db.save_session("order", &messages, "").unwrap();
-        let (loaded, _) = db.load_session("order").unwrap();
+        db.append_session("order", sid, &messages, "").unwrap();
+        let (loaded, _) = db.load_session("order", sid).unwrap();
         for (i, msg) in loaded.iter().enumerate() {
             assert_eq!(msg.content, format!("message {i}"));
         }

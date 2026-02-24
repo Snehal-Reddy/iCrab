@@ -164,8 +164,9 @@ mod tests {
     }
 
     fn seed(db: &BrainDb, chat_id: &str, role: &str, content: &str) {
-        db.save_session(
+        db.append_session(
             chat_id,
+            "seed-session",
             &[StoredMessage {
                 role: role.into(),
                 content: content.into(),

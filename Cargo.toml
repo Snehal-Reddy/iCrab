@@ -23,6 +23,8 @@ toml = "0.9.8"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 regex-lite = "0.1"
 serde_json = "1.0"
+# UUID v4 for session identifiers
+uuid = { version = "1", features = ["v4"] }
 # Date for today + recent daily notes (YYYYMMDD)
 
 # IANA timezone support for local-time system prompt line (DST-aware)

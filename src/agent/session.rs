@@ -44,26 +44,35 @@ impl From<DbError> for SessionError {
 
 /// In-memory session: history and optional summary. Cap history at MAX_HISTORY.
 /// Backed by the `chat_history` and `chat_summary` tables in `BrainDb`.
+///
+/// `pending_inserts` tracks messages added since the last `save()`. Only those
+/// are written to the database on the next save (append-only storage).
 #[derive(Debug, Clone)]
 pub struct Session {
     history: Vec<Message>,
+    pending_inserts: Vec<Message>,
     summary: String,
     chat_id: String,
+    session_id: String,
     db: Arc<BrainDb>,
 }
 
 impl Session {
-    /// Load session from the database; missing chat_id → empty session.
+    /// Load session from the database; missing chat_id → empty session with a fresh session_id.
     pub async fn load(db: Arc<BrainDb>, chat_id: &str) -> Result<Self, SessionError> {
         let chat_id = chat_id.to_string();
         let db_clone = Arc::clone(&db);
         let chat_id_clone = chat_id.clone();
 
-        let (stored, summary) =
-            tokio::task::spawn_blocking(move || db_clone.load_session(&chat_id_clone))
-                .await
-                .map_err(|e| SessionError::Db(format!("spawn_blocking: {e}")))?
-                .map_err(SessionError::from)?;
+        // Fetch (or create) the active session UUID and the messages for that session.
+        let (session_id, stored, summary) = tokio::task::spawn_blocking(move || {
+            let session_id = db_clone.get_or_create_session_id(&chat_id_clone)?;
+            let (stored, summary) = db_clone.load_session(&chat_id_clone, &session_id)?;
+            Ok::<_, crate::memory::db::DbError>((session_id, stored, summary))
+        })
+        .await
+        .map_err(|e| SessionError::Db(format!("spawn_blocking: {e}")))?
+        .map_err(SessionError::from)?;
 
         let history = stored
             .into_iter()
@@ -72,31 +81,42 @@ impl Session {
 
         let mut session = Self {
             history,
+            pending_inserts: Vec::new(),
             summary,
             chat_id,
+            session_id,
             db,
         };
-        // Enforce cap in case the DB somehow has more than MAX_HISTORY rows.
+        // Enforce cap in case the DB has more than MAX_HISTORY rows.
         session.cap_history();
         Ok(session)
     }
 
-    /// Persist the session (history + summary) to the database.
-    pub async fn save(&self) -> Result<(), SessionError> {
+    /// Persist only the new messages (since the last save) to the database, then
+    /// clear the pending queue.  Append-only: previous messages are never deleted.
+    pub async fn save(&mut self) -> Result<(), SessionError> {
+        if self.pending_inserts.is_empty() && self.summary.is_empty() {
+            return Ok(());
+        }
+
         let stored: Vec<StoredMessage> = self
-            .history
+            .pending_inserts
             .iter()
             .map(message_to_stored)
             .collect::<Result<Vec<_>, _>>()?;
 
         let chat_id = self.chat_id.clone();
+        let session_id = self.session_id.clone();
         let summary = self.summary.clone();
         let db = Arc::clone(&self.db);
 
-        tokio::task::spawn_blocking(move || db.save_session(&chat_id, &stored, &summary))
+        tokio::task::spawn_blocking(move || db.append_session(&chat_id, &session_id, &stored, &summary))
             .await
             .map_err(|e| SessionError::Db(format!("spawn_blocking: {e}")))?
-            .map_err(SessionError::from)
+            .map_err(SessionError::from)?;
+
+        self.pending_inserts.clear();
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -104,32 +124,38 @@ impl Session {
     // -----------------------------------------------------------------------
 
     pub fn add_user_message(&mut self, content: &str) {
-        self.history.push(Message {
+        let msg = Message {
             role: Role::User,
             content: content.to_string(),
             tool_call_id: None,
             tool_calls: None,
-        });
+        };
+        self.pending_inserts.push(msg.clone());
+        self.history.push(msg);
         self.cap_history();
     }
 
     pub fn add_assistant_message(&mut self, content: &str, tool_calls: Option<Vec<ToolCall>>) {
-        self.history.push(Message {
+        let msg = Message {
             role: Role::Assistant,
             content: content.to_string(),
             tool_call_id: None,
             tool_calls,
-        });
+        };
+        self.pending_inserts.push(msg.clone());
+        self.history.push(msg);
         self.cap_history();
     }
 
     pub fn add_tool_message(&mut self, tool_call_id: &str, content: &str) {
-        self.history.push(Message {
+        let msg = Message {
             role: Role::Tool,
             content: content.to_string(),
             tool_call_id: Some(tool_call_id.to_string()),
             tool_calls: None,
-        });
+        };
+        self.pending_inserts.push(msg.clone());
+        self.history.push(msg);
         self.cap_history();
     }
 
@@ -151,6 +177,11 @@ impl Session {
     #[inline]
     pub fn summary(&self) -> &str {
         &self.summary
+    }
+
+    #[inline]
+    pub fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     pub fn set_summary(&mut self, s: String) {
@@ -265,10 +296,10 @@ mod tests {
         assert_eq!(loaded.summary(), "brief");
     }
 
-    // ── Overwrite on second save ──────────────────────────────────────────────
+    // ── Append on second save ─────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn session_save_overwrites() {
+    async fn session_save_appends() {
         let (_tmp, db) = temp_db();
 
         // First save
@@ -276,7 +307,7 @@ mod tests {
         s1.add_user_message("First");
         s1.save().await.unwrap();
 
-        // Second save with more messages
+        // Second save with more messages (same session_id)
         let mut s2 = Session::load(Arc::clone(&db), "c").await.unwrap();
         assert_eq!(s2.history().len(), 1);
         s2.add_assistant_message("OK", None);
@@ -302,6 +333,27 @@ mod tests {
         assert_eq!(session.history().first().unwrap().content, "msg 5");
     }
 
+    // ── All pending inserts reach the DB even when history is capped ──────────
+
+    #[tokio::test]
+    async fn session_all_pending_inserts_saved_to_db() {
+        let (_tmp, db) = temp_db();
+        let mut session = Session::load(Arc::clone(&db), "cap2").await.unwrap();
+        for i in 0..55 {
+            session.add_user_message(&format!("msg {}", i));
+        }
+        // In-memory history is capped at MAX_HISTORY (50)
+        assert_eq!(session.history().len(), MAX_HISTORY);
+
+        // Save — all 55 pending inserts must go to the DB
+        session.save().await.unwrap();
+
+        // Reload: DB has 55 rows, memory caps to 50; oldest in memory is msg 5
+        let reloaded = Session::load(Arc::clone(&db), "cap2").await.unwrap();
+        assert_eq!(reloaded.history().len(), MAX_HISTORY);
+        assert_eq!(reloaded.history().first().unwrap().content, "msg 5");
+    }
+
     // ── Truncate history ──────────────────────────────────────────────────────
 
     #[test]
@@ -310,8 +362,10 @@ mod tests {
         let db = Arc::new(BrainDb::open(tmp.path()).unwrap());
         let mut session = Session {
             history: Vec::new(),
+            pending_inserts: Vec::new(),
             summary: String::new(),
             chat_id: "truncate".to_string(),
+            session_id: "test-session".to_string(),
             db,
         };
 
