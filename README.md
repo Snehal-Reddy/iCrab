@@ -103,20 +103,20 @@ Inside iSH:
 # Make it executable
 chmod +x icrab
 
-# Run it
-./icrab
+# Keep iSH running in the background and start iCrab
+cat /dev/location > /dev/null & ./icrab
 ```
+
+> **Pro Tip:** To keep iCrab running even when the screen is off, set **Location Permissions** for iSH to **"Always"**. The `cat /dev/location` command prevents iOS from suspending the app.
+
 Now, open Telegram, find your bot, and say "Hello"!
 
 ---
 
 ## 🧠 Teaching iCrab New Skills
 
-iCrab is designed to be easily extensible without writing code. To add a skill, simply create a folder in `workspace/skills/` and drop a `SKILL.md` file inside it.
-
-```text
+iCrab is designed to be easily extensible without writing code. To add a skill, simply create a folder in `workspace/skills/` and drop a `SKILL.md` file inside it.```text
 workspace/
 └── skills/
     └── workout_logger/
         └── SKILL.md
-```
