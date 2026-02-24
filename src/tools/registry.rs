@@ -11,7 +11,6 @@ use crate::config::Config;
 use crate::llm::ToolDef;
 use crate::tools::context::ToolCtx;
 use crate::tools::file::{AppendFile, EditFile, ListDir, ReadFile, WriteFile};
-use crate::tools::message::MessageTool;
 use crate::tools::result::ToolResult;
 use crate::tools::web::{WebFetchTool, WebSearchProvider, WebSearchTool, web_client};
 
@@ -104,8 +103,13 @@ impl ToolRegistry {
 const DEFAULT_BRAVE_MAX_RESULTS: u8 = 5;
 const DEFAULT_WEB_FETCH_MAX_CHARS: u32 = 50_000;
 
-/// Build the core registry (file + message + web).  Used for subagent
-/// registries (no spawn, no cron) and as the base for the main registry.
+/// Build the core registry (file + web).  Used as the base for both the
+/// main-agent registry and the subagent registry.
+///
+/// `MessageTool` is intentionally NOT included here. It is only added to
+/// subagent registries, where background tasks need to push results to the
+/// user. In the main agent the reply is returned as text content; offering
+/// `message` there causes the LLM to send duplicate replies.
 pub fn build_core_registry(config: &Config) -> ToolRegistry {
     let reg = ToolRegistry::new();
     reg.register(ReadFile);
@@ -113,7 +117,6 @@ pub fn build_core_registry(config: &Config) -> ToolRegistry {
     reg.register(ListDir);
     reg.register(EditFile);
     reg.register(AppendFile);
-    reg.register(MessageTool);
 
     let web_cfg = config.tools.as_ref().and_then(|t| t.web.as_ref());
     let brave_max_results = web_cfg

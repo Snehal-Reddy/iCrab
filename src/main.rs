@@ -21,6 +21,7 @@ use icrab::sync;
 use icrab::telegram::{self, OutboundMsg};
 use icrab::tools;
 use icrab::tools::cron::{CronStore, CronTool};
+use icrab::tools::message::MessageTool;
 use icrab::tools::spawn::SpawnTool;
 use icrab::tools::subagent::SubagentTool;
 use icrab::tools::{GitSyncTool, GrepDirTool, SearchChatTool, SearchVaultTool};
@@ -100,9 +101,11 @@ async fn main() {
         sync::DEFAULT_PULL_INTERVAL_SECS / 3600
     );
 
-    // Build subagent registry (core + search tools — no spawn, no cron).
+    // Build subagent registry (core + message + search tools — no spawn, no cron).
+    // MessageTool is included here so background subagents can push results to the user.
     let subagent_registry = Arc::new({
         let reg = tools::build_core_registry(&cfg);
+        reg.register(MessageTool);
         reg.register(SearchVaultTool::new(Arc::clone(&db)));
         reg.register(SearchChatTool::new(Arc::clone(&db)));
         reg.register(GrepDirTool);
