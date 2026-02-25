@@ -2,6 +2,7 @@
 //!
 //! Single HTTP provider (OpenRouter default). No streaming; minimal types.
 
+use std::error::Error;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -115,6 +116,32 @@ impl std::fmt::Display for LlmError {
 }
 
 impl std::error::Error for LlmError {}
+
+/// Format a reqwest error with an explicit kind/code (timeout, connection, HTTP status) and the full
+/// error chain, so users see what actually happened.
+fn format_reqwest_error(e: &reqwest::Error) -> String {
+    let code = if let Some(status) = e.status() {
+        format!(
+            "HTTP {} {}",
+            status.as_u16(),
+            status.canonical_reason().unwrap_or("")
+        )
+    } else if e.is_timeout() {
+        "timeout".to_string()
+    } else if e.is_connect() {
+        "connection failed".to_string()
+    } else {
+        "request failed".to_string()
+    };
+    let mut detail = e.to_string();
+    let mut src: Option<&(dyn Error + '_)> = e.source();
+    while let Some(inner) = src {
+        detail.push_str(" | ");
+        detail.push_str(&inner.to_string());
+        src = inner.source();
+    }
+    format!("{} | {}", code, detail)
+}
 
 // --- Request/response (raw API shape for serde) ---
 
@@ -235,13 +262,13 @@ impl HttpProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+            .map_err(|e| LlmError::Http(format_reqwest_error(&e)))?;
 
         let status = res.status();
         let text = res
             .text()
             .await
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+            .map_err(|e| LlmError::Http(format_reqwest_error(&e)))?;
         if !status.is_success() {
             return Err(LlmError::Http(format!("{} {}", status, text)));
         }
