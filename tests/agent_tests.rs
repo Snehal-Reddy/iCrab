@@ -45,6 +45,7 @@ async fn test_agent_basic_flow() {
         chat_id: Some(123),
         channel: Some("telegram".into()),
         outbound_tx: None,
+        delivered: Default::default(),
     };
 
     let result = process_message(
@@ -154,6 +155,7 @@ async fn test_agent_tool_use_loop() {
         chat_id: Some(123),
         channel: Some("telegram".into()),
         outbound_tx: None,
+        delivered: Default::default(),
     };
 
     let result = process_message(
@@ -214,6 +216,7 @@ async fn test_agent_session_load_on_restart() {
         chat_id: Some(1),
         channel: Some("telegram".into()),
         outbound_tx: None,
+        delivered: Default::default(),
     };
 
     let r1 = process_message(
@@ -334,6 +337,7 @@ async fn test_agent_unknown_tool_completes_with_error_in_conversation() {
         chat_id: Some(1),
         channel: Some("telegram".into()),
         outbound_tx: None,
+        delivered: Default::default(),
     };
 
     let result = process_message(
@@ -408,6 +412,7 @@ async fn test_agent_invalid_tool_args_completes_with_error_in_conversation() {
         chat_id: Some(1),
         channel: Some("telegram".into()),
         outbound_tx: None,
+        delivered: Default::default(),
     };
 
     let result = process_message(

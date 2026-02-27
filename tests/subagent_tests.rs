@@ -490,6 +490,7 @@ async fn test_main_agent_spawn_returns_before_subagent_completes() {
         chat_id: Some(1),
         channel: Some("telegram".into()),
         outbound_tx: Some(Arc::new(_out_tx)),
+        delivered: Default::default(),
     };
 
     let db = std::sync::Arc::new(icrab::memory::db::BrainDb::open(&ws.root).unwrap());

@@ -19,6 +19,7 @@ async fn test_file_ops() {
         chat_id: None,
         channel: None,
         outbound_tx: None,
+        delivered: Default::default(),
     };
 
     // 1. Write file
@@ -62,6 +63,7 @@ async fn test_path_traversal() {
         chat_id: None,
         channel: None,
         outbound_tx: None,
+        delivered: Default::default(),
     };
 
     let read_tool = ReadFile;
@@ -86,6 +88,7 @@ fn ctx_restricted(workspace: &std::path::Path) -> ToolCtx {
         chat_id: None,
         channel: None,
         outbound_tx: None,
+        delivered: Default::default(),
     }
 }
 
@@ -229,6 +232,7 @@ async fn test_message_tool_sends_to_outbound() {
         chat_id: Some(42),
         channel: Some("telegram".into()),
         outbound_tx: Some(std::sync::Arc::new(outbound_tx)),
+        delivered: Default::default(),
     };
 
     // 1st call: LLM uses message tool

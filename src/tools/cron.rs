@@ -1011,6 +1011,7 @@ mod tool_tests {
             chat_id,
             channel: None,
             outbound_tx: None,
+            delivered: Default::default(),
         }
     }
 

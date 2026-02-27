@@ -1,6 +1,7 @@
 //! Agent loop: context builder, session load/save/summarize, LLM + tool_calls loop, subagent runner.
 
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -133,6 +134,7 @@ pub async fn run_agent_loop(
                                 .clone()
                                 .unwrap_or_else(|| "telegram".to_string()),
                         });
+                        tool_ctx.delivered.store(true, Ordering::Relaxed);
                     }
                 }
             }
@@ -302,6 +304,7 @@ pub(crate) async fn run_subagent(
         chat_id: Some(chat_id),
         channel: Some(channel),
         outbound_tx: Some(outbound_tx),
+        delivered: Default::default(),
     };
 
     match run_agent_loop(

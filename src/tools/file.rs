@@ -347,6 +347,7 @@ mod tests {
             chat_id: None,
             channel: None,
             outbound_tx: None,
+            delivered: Default::default(),
         };
         let rel = f.strip_prefix(&dir).unwrap().to_str().unwrap();
         let args = serde_json::json!({ "path": rel });

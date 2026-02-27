@@ -175,6 +175,7 @@ mod tests {
             chat_id: None,
             channel: None,
             outbound_tx: None,
+            delivered: Default::default(),
         };
         let args = serde_json::json!({ "path": "." });
         let res = reg.execute(&ctx, "read_file", &args).await;

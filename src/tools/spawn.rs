@@ -171,6 +171,7 @@ mod tests {
                 chat_id: Some(123),
                 channel: Some("telegram".into()),
                 outbound_tx: Some(Arc::new(tx)),
+                delivered: Default::default(),
             }
         } else {
             ToolCtx {
@@ -179,6 +180,7 @@ mod tests {
                 chat_id: None,
                 channel: None,
                 outbound_tx: None,
+                delivered: Default::default(),
             }
         }
     }

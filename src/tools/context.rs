@@ -1,6 +1,7 @@
 //! Execution context for tools: workspace, chat, outbound channel.
 
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -20,4 +21,8 @@ pub struct ToolCtx {
     pub channel: Option<String>,
     /// Send outbound messages (e.g. to Telegram). Used by message tool.
     pub outbound_tx: Option<Arc<mpsc::Sender<OutboundMsg>>>,
+    /// Set to true when any user-visible message has been sent during this request.
+    /// Shared via Arc so clones (e.g. sub-ctx) observe the same flag.
+    /// main.rs reads this after the agent loop to skip redundant delivery.
+    pub delivered: Arc<AtomicBool>,
 }

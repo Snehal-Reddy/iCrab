@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use tokio::sync::mpsc;
 
@@ -177,12 +177,14 @@ async fn main() {
             last_chat_id.store(msg.chat_id, Ordering::Relaxed);
         }
 
+        let delivered = Arc::new(AtomicBool::new(false));
         let tool_ctx = tools::ToolCtx {
             workspace: workspace.clone(),
             restrict_to_workspace: restrict,
             chat_id: Some(msg.chat_id),
             channel: Some(msg.channel.clone()),
             outbound_tx: Some(Arc::new(outbound_tx.clone())),
+            delivered: Arc::clone(&delivered),
         };
         let chat_id_str = msg.chat_id.to_string();
 
@@ -240,12 +242,16 @@ async fn main() {
             continue;
         }
 
-        let _ = outbound_tx
-            .send(OutboundMsg {
-                chat_id: msg.chat_id,
-                text: reply,
-                channel: msg.channel,
-            })
-            .await;
+        // Skip if a tool (message tool or for_user result) already sent content to the user
+        // during the agent loop, to avoid delivering the same response twice.
+        if !delivered.load(Ordering::Relaxed) {
+            let _ = outbound_tx
+                .send(OutboundMsg {
+                    chat_id: msg.chat_id,
+                    text: reply,
+                    channel: msg.channel,
+                })
+                .await;
+        }
     }
 }

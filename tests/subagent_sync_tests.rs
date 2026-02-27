@@ -56,6 +56,7 @@ async fn subagent_tool_returns_result_synchronously() {
         chat_id: Some(123),
         channel: Some("telegram".to_string()),
         outbound_tx: None,
+        delivered: Default::default(),
     };
 
     let args = json!({
@@ -74,10 +75,9 @@ async fn subagent_tool_returns_result_synchronously() {
     assert!(!result.async_, "Result should be synchronous");
     assert!(result.for_llm.contains("Subagent 'greet' completed"));
     assert!(result.for_llm.contains("Subagent completed the task."));
-    assert_eq!(
-        result.for_user.as_deref(),
-        Some("Subagent completed the task.")
-    );
+    // for_user is intentionally None: the subagent delivers via the message tool
+    // (Path A), so SubagentTool no longer duplicates via for_user (Path C).
+    assert!(result.for_user.is_none(), "for_user should be None to avoid duplicate delivery");
 }
 
 #[tokio::test]
@@ -103,6 +103,7 @@ async fn subagent_tool_missing_task_returns_error() {
         chat_id: Some(123),
         channel: None,
         outbound_tx: None,
+        delivered: Default::default(),
     };
 
     let result = tool.execute(&ctx, &json!({})).await;

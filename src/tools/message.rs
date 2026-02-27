@@ -1,5 +1,7 @@
 //! Send text to user via outbound queue (Telegram); used by main agent and subagent.
 
+use std::sync::atomic::Ordering;
+
 use serde_json::Value;
 
 use crate::telegram::OutboundMsg;
@@ -61,7 +63,10 @@ impl Tool for MessageTool {
                 channel,
             };
             match tx.try_send(msg) {
-                Ok(()) => ToolResult::silent("sent"),
+                Ok(()) => {
+                    ctx.delivered.store(true, Ordering::Relaxed);
+                    ToolResult::silent("sent")
+                }
                 Err(e) => ToolResult::error(e.to_string()),
             }
         })

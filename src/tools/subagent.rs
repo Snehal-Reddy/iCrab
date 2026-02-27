@@ -61,16 +61,19 @@ impl Tool for SubagentTool {
             .channel
             .clone()
             .unwrap_or_else(|| "telegram".to_string());
+        // Share the parent's delivered flag so the message tool inside the
+        // subagent propagates the "already sent" state back to main.rs.
+        let delivered = ctx.delivered.clone();
 
-        // We construct a new ToolCtx for the subagent that shares the outbound capabilities
-        // of the parent, but uses the manager's workspace config.
-        // NOTE: The plan says "Build ToolCtx from manager’s workspace/restrict and current ctx’s chat_id..."
+        // We construct a new ToolCtx for the subagent that shares the outbound
+        // capabilities of the parent and the delivered flag.
         let sub_ctx = ToolCtx {
             workspace: manager.workspace().clone(),
             restrict_to_workspace: manager.restrict_to_workspace(),
             chat_id,
             channel: Some(channel),
             outbound_tx,
+            delivered,
         };
 
         Box::pin(async move {
@@ -155,29 +158,16 @@ impl Tool for SubagentTool {
                 Ok(content) => {
                     let display_label = label.as_deref().unwrap_or("task");
 
-                    // Truncate for user
-                    let for_user = if content.len() > 500 {
-                        let mut s = content.chars().take(500).collect::<String>();
-                        s.push_str("...");
-                        s
-                    } else {
-                        content.clone()
-                    };
-
+                    // The subagent is expected to have delivered its result to the user
+                    // via the message tool (setting the delivered flag).  We do NOT set
+                    // for_user here to avoid Path-C duplication.  The LLM receives the
+                    // full result and is instructed not to repeat it.
                     let for_llm = format!(
-                        "Subagent '{}' completed.
-Result:
-{}",
+                        "Subagent '{}' completed. Result already sent to user via message tool. Do not repeat it.\nResult:\n{}",
                         display_label, content
                     );
 
-                    ToolResult {
-                        is_error: false,
-                        silent: false,
-                        for_user: Some(for_user),
-                        for_llm,
-                        async_: false,
-                    }
+                    ToolResult::ok(for_llm)
                 }
                 Err(e) => ToolResult::error(format!("Subagent execution failed: {}", e)),
             }
@@ -246,6 +236,7 @@ mod tests {
             chat_id: Some(123),
             channel: Some("telegram".into()),
             outbound_tx: None,
+            delivered: Default::default(),
         }
     }
 }
